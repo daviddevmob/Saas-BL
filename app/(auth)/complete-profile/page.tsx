@@ -101,7 +101,7 @@ export default function CompleteProfilePage() {
 
     try {
       // Create user profile in Firestore
-      await setDoc(doc(db, 'users', auth.currentUser.uid), {
+      const userData = {
         uid: auth.currentUser.uid,
         email: userEmail,
         name: name,
@@ -109,7 +109,12 @@ export default function CompleteProfilePage() {
         photoURL: photoURL,
         admin: false,
         createdAt: new Date().toISOString(),
-      });
+      };
+
+      await setDoc(doc(db, 'users', auth.currentUser.uid), userData);
+
+      // Save to cache
+      localStorage.setItem('userCache', JSON.stringify(userData));
 
       // Redirect to dashboard
       router.push('/dashboard');

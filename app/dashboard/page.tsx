@@ -1147,6 +1147,14 @@ export default function DashboardPage() {
                               { photoURL: downloadURL },
                               { merge: true }
                             );
+
+                            // Update cache
+                            const cachedData = localStorage.getItem('userCache');
+                            if (cachedData) {
+                              const userData = JSON.parse(cachedData);
+                              userData.photoURL = downloadURL;
+                              localStorage.setItem('userCache', JSON.stringify(userData));
+                            }
                           } catch (err) {
                             console.error('Error uploading photo:', err);
                             alert('Erro ao fazer upload da foto. Tente novamente.');
@@ -1296,6 +1304,19 @@ export default function DashboardPage() {
                             );
                             setUserName(editName);
                             setUserBio(editBio);
+
+                            // Update cache with latest user data
+                            const updatedCache = {
+                              uid: auth.currentUser.uid,
+                              email: userEmail,
+                              name: editName,
+                              bio: editBio,
+                              photoURL: userPhoto,
+                              admin: isUserAdmin,
+                              createdAt: new Date().toISOString(),
+                            };
+                            localStorage.setItem('userCache', JSON.stringify(updatedCache));
+
                             setIsEditDialogOpen(false);
                           } catch (err) {
                             console.error('Error saving profile:', err);

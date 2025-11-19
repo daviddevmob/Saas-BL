@@ -9,6 +9,126 @@ import { auth, db } from '@/lib/firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 
+interface FormContentProps {
+  email: string;
+  password: string;
+  error: string;
+  isLoading: boolean;
+  onEmailChange: (email: string) => void;
+  onPasswordChange: (password: string) => void;
+  onSubmit: (e: FormEvent<HTMLFormElement>) => void;
+}
+
+function FormContent({
+  email,
+  password,
+  error,
+  isLoading,
+  onEmailChange,
+  onPasswordChange,
+  onSubmit,
+}: FormContentProps) {
+  return (
+    <div className="w-full max-w-md">
+      {/* Logo/Header */}
+      <div className="mb-8 text-center">
+        <div className="flex justify-center mb-6">
+          <Image
+            src="/bl-logo.svg"
+            alt="BrandingLab Logo"
+            width={60}
+            height={60}
+          />
+        </div>
+        <h1 className="text-4xl font-bold text-slate-900 font-display mb-2">
+          Bem-vindo(a) de Volta
+        </h1>
+      </div>
+
+      {/* Form */}
+      <form onSubmit={onSubmit} className="space-y-6">
+        {/* Error Message */}
+        {error && (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
+
+        {/* Email Field */}
+        <div>
+          <label
+            htmlFor="email"
+            className="block text-sm font-medium text-slate-700 mb-2"
+          >
+            Email
+          </label>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(e) => onEmailChange(e.target.value)}
+            placeholder="seu@email.com"
+            required
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+          />
+        </div>
+
+        {/* Password Field */}
+        <div>
+          <label
+            htmlFor="password"
+            className="block text-sm font-medium text-slate-700 mb-2"
+          >
+            Senha
+          </label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(e) => onPasswordChange(e.target.value)}
+            placeholder="••••••••"
+            required
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+          />
+        </div>
+
+        {/* Submit Button */}
+        <div className="flex justify-center">
+          <Button
+            type="submit"
+            size="sm"
+            width={137}
+            height={32}
+            isLoading={isLoading}
+          >
+            Entrar com Senha
+          </Button>
+        </div>
+      </form>
+
+      {/* Divider */}
+      <div className="relative my-6">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-slate-300"></div>
+        </div>
+        <div className="relative flex justify-center text-sm">
+          <span className="px-2 bg-slate-50 text-slate-500">ou</span>
+        </div>
+      </div>
+
+      {/* Magic Link Button */}
+      <Button
+        type="button"
+        fullWidth
+        size="sm"
+        height={32}
+      >
+        Entrar com Link Mágico 🚀
+      </Button>
+    </div>
+  );
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -150,117 +270,24 @@ export default function LoginPage() {
     }
   };
 
-  // Conteúdo do formulário
-  const FormContent = () => (
-    <div className="w-full max-w-md">
-      {/* Logo/Header */}
-      <div className="mb-8 text-center">
-        <div className="flex justify-center mb-6">
-          <Image
-            src="/bl-logo.svg"
-            alt="BrandingLab Logo"
-            width={60}
-            height={60}
-          />
-        </div>
-        <h1 className="text-4xl font-bold text-slate-900 font-display mb-2">
-          Bem-vindo(a) de Volta
-        </h1>
-      </div>
-
-      {/* Form */}
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Error Message */}
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-sm text-red-700">{error}</p>
-          </div>
-        )}
-
-        {/* Email Field */}
-        <div>
-          <label
-            htmlFor="email"
-            className="block text-sm font-medium text-slate-700 mb-2"
-          >
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="seu@email.com"
-            required
-            className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-          />
-        </div>
-
-        {/* Password Field */}
-        <div>
-          <label
-            htmlFor="password"
-            className="block text-sm font-medium text-slate-700 mb-2"
-          >
-            Senha
-          </label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-            className="w-full px-4 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-          />
-        </div>
-
-        {/* Submit Button */}
-        <div className="flex justify-center">
-          <Button
-            type="submit"
-            size="sm"
-            width={137}
-            height={32}
-            isLoading={isLoading}
-          >
-            Entrar com Senha
-          </Button>
-        </div>
-      </form>
-
-      {/* Divider */}
-      <div className="relative my-6">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-slate-300"></div>
-        </div>
-        <div className="relative flex justify-center text-sm">
-          <span className="px-2 bg-slate-50 text-slate-500">ou</span>
-        </div>
-      </div>
-
-      {/* Magic Link Button */}
-      <Button
-        type="button"
-        fullWidth
-        size="sm"
-        height={32}
-      >
-        Entrar com Link Mágico 🚀
-      </Button>
-    </div>
-  );
-
-  // Simplified Layout - Form on top, small image at bottom
+  // Responsive Layout - Desktop: form left 50%, image right 50% | Mobile: form top, image bottom small
   return (
-    <div className="min-h-screen flex flex-col bg-white">
-      {/* Formulário - Top */}
-      <div className="flex-1 flex items-center justify-center px-8 py-12 bg-slate-50">
-        <FormContent />
+    <div className="min-h-screen flex flex-col md:flex-row bg-white">
+      {/* Formulário */}
+      <div className="flex-1 flex items-center justify-center px-8 py-12 md:py-12 bg-slate-50 md:w-1/2">
+        <FormContent
+          email={email}
+          password={password}
+          error={error}
+          isLoading={isLoading}
+          onEmailChange={setEmail}
+          onPasswordChange={setPassword}
+          onSubmit={handleSubmit}
+        />
       </div>
 
-      {/* Imagem - Bottom (Small) */}
-      <div className="h-32 bg-white relative overflow-hidden w-full">
+      {/* Imagem */}
+      <div className="h-32 md:h-auto md:w-1/2 bg-white relative overflow-hidden w-full">
         <Image
           src={loginImage}
           alt="BrandingLab"

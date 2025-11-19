@@ -25,7 +25,20 @@ export default function Home() {
           // Não tem perfil, ir para tela de completar perfil
           router.push('/complete-profile');
         } else {
-          // Tem perfil, ir para dashboard
+          // Tem perfil, salvar em cache e ir para dashboard
+          const userData = userDoc.data();
+          localStorage.setItem(
+            'userCache',
+            JSON.stringify({
+              uid: user.uid,
+              email: userData?.email || user.email || '',
+              name: userData?.name || '',
+              bio: userData?.bio || '',
+              photoURL: userData?.photoURL || '/dashboard/avatar.png',
+              admin: userData?.admin || false,
+              createdAt: userData?.createdAt || new Date().toISOString(),
+            })
+          );
           router.push('/dashboard');
         }
       } catch (err) {
