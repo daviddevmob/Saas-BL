@@ -11,6 +11,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import Button from '@/components/Button';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import CsvUpload from '@/components/CsvUpload';
 
 interface MenuItem {
   id: string;
@@ -413,61 +414,15 @@ export default function DashboardPage() {
       ),
     },
     {
-      id: 'diagnostico',
-      label: 'Diagnóstico',
+      id: 'integracoes',
+      label: 'Integrações',
       icon: (
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7v5l3.5 2" />
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+          <polyline points="15 3 21 3 21 9" />
+          <line x1="10" y1="14" x2="21" y2="3" />
         </svg>
       ),
-      children: [],
-    },
-    {
-      id: 'objetivos',
-      label: 'Objetivos',
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="10" />
-          <circle cx="12" cy="12" r="6" />
-          <circle cx="12" cy="12" r="2" />
-        </svg>
-      ),
-      children: [],
-    },
-    {
-      id: 'metas',
-      label: 'Metas',
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-          <polyline points="13 2 13 9 20 9" />
-          <line x1="9" y1="13" x2="15" y2="13" />
-          <line x1="9" y1="17" x2="15" y2="17" />
-        </svg>
-      ),
-      children: [],
-    },
-    {
-      id: 'plano-acao',
-      label: 'Plano de Ação',
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-      ),
-      children: [],
-    },
-    {
-      id: 'configuracoes',
-      label: 'Configurações',
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24" />
-        </svg>
-      ),
-      children: [],
     },
   ];
 
@@ -1512,8 +1467,103 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Integrações Page */}
+        {activeMenu === 'integracoes' && (
+          <div className="flex-1 overflow-auto px-4 md:px-[110px] pt-6 pb-8" style={{ backgroundColor: '#F8FAFC' }}>
+            <div className="flex flex-col gap-6">
+              {/* Page Description */}
+              <div>
+                <p
+                  style={{
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: '0.875rem',
+                    color: '#64748B',
+                    margin: 0,
+                    maxWidth: '600px',
+                  }}
+                >
+                  Gerencie suas integrações com plataformas externas. Importe dados de outras ferramentas para sincronizar com o sistema.
+                </p>
+              </div>
+
+              {/* CSV Upload Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <CsvUpload
+                  id="hotmart"
+                  title="Importar CSV Hotmart"
+                  description="Faça upload do arquivo CSV exportado da Hotmart para sincronizar os dados."
+                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-hotmart-csv"
+                  userEmail={userEmail}
+                  onSuccess={(result) => {
+                    console.log('Upload Hotmart success:', result);
+                  }}
+                  onError={(error) => {
+                    console.error('Upload Hotmart error:', error);
+                  }}
+                />
+
+                <CsvUpload
+                  id="eduzz"
+                  title="Importar CSV Eduzz"
+                  description="Faça upload do arquivo CSV exportado da Eduzz para sincronizar os dados."
+                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-eduzz-csv"
+                  userEmail={userEmail}
+                  onSuccess={(result) => {
+                    console.log('Upload Eduzz success:', result);
+                  }}
+                  onError={(error) => {
+                    console.error('Upload Eduzz error:', error);
+                  }}
+                />
+
+                <CsvUpload
+                  id="hubla"
+                  title="Importar CSV Hubla"
+                  description="Faça upload do arquivo CSV exportado da Hubla para sincronizar os dados."
+                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-hubla-csv"
+                  userEmail={userEmail}
+                  onSuccess={(result) => {
+                    console.log('Upload Hubla success:', result);
+                  }}
+                  onError={(error) => {
+                    console.error('Upload Hubla error:', error);
+                  }}
+                />
+
+                <CsvUpload
+                  id="kiwify"
+                  title="Importar CSV Kiwify"
+                  description="Faça upload do arquivo CSV exportado da Kiwify para sincronizar os dados."
+                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-kiwify-csv"
+                  userEmail={userEmail}
+                  onSuccess={(result) => {
+                    console.log('Upload Kiwify success:', result);
+                  }}
+                  onError={(error) => {
+                    console.error('Upload Kiwify error:', error);
+                  }}
+                />
+
+                <CsvUpload
+                  id="woocommerce"
+                  title="Importar CSV WooCommerce"
+                  description="Faça upload do arquivo CSV exportado do WooCommerce para sincronizar os dados."
+                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-woo-csv"
+                  userEmail={userEmail}
+                  onSuccess={(result) => {
+                    console.log('Upload WooCommerce success:', result);
+                  }}
+                  onError={(error) => {
+                    console.error('Upload WooCommerce error:', error);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Placeholder for other menu items */}
-        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && (
+        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="text-center">
               <h2 className="text-2xl font-semibold text-slate-900 mb-2">
