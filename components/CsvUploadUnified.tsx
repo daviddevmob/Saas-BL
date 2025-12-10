@@ -63,6 +63,121 @@ const PLATFORMS: Platform[] = [
   { id: 'woo', name: 'WooCommerce', color: '#7C3AED', iconColor: 'rgba(124, 58, 237, 0.1)', logo: '/lojas/woo.png' },
 ];
 
+// Documentação das colunas esperadas por plataforma
+const CSV_DOCS: Record<string, {
+  name: string;
+  color: string;
+  statusValue: string;
+  columns: { field: string; column: string; required: boolean }[];
+}> = {
+  hubla: {
+    name: 'Hubla',
+    color: '#9333EA',
+    statusValue: 'Paga',
+    columns: [
+      { field: 'Email', column: 'Email do cliente', required: true },
+      { field: 'Nome', column: 'Nome do cliente', required: true },
+      { field: 'Telefone', column: 'Telefone do cliente', required: false },
+      { field: 'CPF/CNPJ', column: 'Documento do cliente', required: false },
+      { field: 'Produto', column: 'Nome do produto', required: false },
+      { field: 'ID Transação', column: 'ID da fatura', required: true },
+      { field: 'Valor', column: 'Valor total', required: false },
+      { field: 'Status', column: 'Status da fatura', required: true },
+      { field: 'CEP', column: 'Endereço CEP', required: false },
+      { field: 'Endereço', column: 'Endereço Rua', required: false },
+      { field: 'Cidade', column: 'Endereço Cidade', required: false },
+      { field: 'Estado', column: 'Endereço Estado', required: false },
+    ],
+  },
+  hotmart: {
+    name: 'Hotmart',
+    color: '#F97316',
+    statusValue: 'Aprovado',
+    columns: [
+      { field: 'Email', column: 'Email', required: true },
+      { field: 'Nome', column: 'Nome', required: true },
+      { field: 'Telefone', column: 'Telefone Final', required: false },
+      { field: 'CPF/CNPJ', column: 'Documento', required: false },
+      { field: 'Produto', column: 'Nome do Produto', required: false },
+      { field: 'ID Transação', column: 'Transação', required: true },
+      { field: 'Valor', column: 'Preço Total', required: false },
+      { field: 'Status', column: 'Status', required: true },
+      { field: 'CEP', column: 'CEP', required: false },
+      { field: 'Endereço', column: 'Endereço', required: false },
+      { field: 'Número', column: 'Número', required: false },
+      { field: 'Complemento', column: 'Complemento', required: false },
+      { field: 'Bairro', column: 'Bairro', required: false },
+      { field: 'Cidade', column: 'Cidade', required: false },
+      { field: 'Estado', column: 'Estado', required: false },
+    ],
+  },
+  eduzz: {
+    name: 'Eduzz',
+    color: '#3B82F6',
+    statusValue: 'Paga',
+    columns: [
+      { field: 'Email', column: 'Cliente / E-mail', required: true },
+      { field: 'Nome', column: 'Cliente / Nome', required: true },
+      { field: 'Telefone', column: 'Cliente / Fones', required: false },
+      { field: 'CPF/CNPJ', column: 'Cliente / Documento', required: false },
+      { field: 'Produto', column: 'Produto', required: false },
+      { field: 'ID Transação', column: 'Fatura', required: true },
+      { field: 'Valor', column: 'Valor da Venda', required: false },
+      { field: 'Status', column: 'Status', required: true },
+      { field: 'CEP', column: 'CEP', required: false },
+      { field: 'Endereço', column: 'Endereço', required: false },
+      { field: 'Número', column: 'Numero', required: false },
+      { field: 'Complemento', column: 'Complemento', required: false },
+      { field: 'Bairro', column: 'Bairro', required: false },
+      { field: 'Cidade', column: 'Cidade', required: false },
+      { field: 'Estado', column: 'UF', required: false },
+    ],
+  },
+  kiwify: {
+    name: 'Kiwify',
+    color: '#22C55E',
+    statusValue: 'paid',
+    columns: [
+      { field: 'Email', column: 'Email', required: true },
+      { field: 'Nome', column: 'Cliente', required: true },
+      { field: 'Telefone', column: 'Celular', required: false },
+      { field: 'CPF/CNPJ', column: 'CPF / CNPJ', required: false },
+      { field: 'Produto', column: 'Produto', required: false },
+      { field: 'ID Transação', column: 'ID da venda', required: true },
+      { field: 'Valor', column: 'Valor líquido', required: false },
+      { field: 'Status', column: 'Status', required: true },
+      { field: 'CEP', column: 'CEP', required: false },
+      { field: 'Endereço', column: 'Endereço', required: false },
+      { field: 'Número', column: 'Numero', required: false },
+      { field: 'Complemento', column: 'Complemento', required: false },
+      { field: 'Bairro', column: 'Bairro', required: false },
+      { field: 'Cidade', column: 'Cidade', required: false },
+      { field: 'Estado', column: 'Estado', required: false },
+    ],
+  },
+  woo: {
+    name: 'WooCommerce',
+    color: '#7C3AED',
+    statusValue: 'wc-completed',
+    columns: [
+      { field: 'Email', column: 'Billing Email Address', required: true },
+      { field: 'Nome', column: 'Billing First Name', required: true },
+      { field: 'Telefone', column: 'Billing Phone', required: false },
+      { field: 'CPF/CNPJ', column: '_billing_cpf', required: false },
+      { field: 'Produto', column: 'Product Name #1', required: false },
+      { field: 'ID Transação', column: 'Order ID', required: true },
+      { field: 'Valor', column: 'Order Total', required: false },
+      { field: 'Status', column: 'Order Status', required: true },
+      { field: 'CEP', column: 'Billing Postcode', required: false },
+      { field: 'Endereço', column: 'Billing Address 1', required: false },
+      { field: 'Complemento', column: 'Billing Address 2', required: false },
+      { field: 'Bairro', column: '_billing_neighborhood', required: false },
+      { field: 'Cidade', column: 'Billing City', required: false },
+      { field: 'Estado', column: 'Billing State', required: false },
+    ],
+  },
+};
+
 const LOCK_DOC = 'import-csv-lock';
 const LOCK_COLLECTION = 'system';
 
@@ -84,6 +199,8 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const delay = 1500; // Delay padrão entre registros (ms)
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [showDocsModal, setShowDocsModal] = useState(false);
+  const [selectedDocPlatform, setSelectedDocPlatform] = useState<string | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -350,27 +467,53 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           </p>
         </div>
 
-        {/* Debug Toggle */}
-        {logs.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          {/* Debug Toggle */}
+          {logs.length > 0 && (
+            <button
+              onClick={() => setShowLogs(!showLogs)}
+              style={{
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.75rem',
+                fontWeight: 500,
+                color: showLogs ? '#22D3EE' : '#94A3B8',
+                backgroundColor: showLogs ? 'rgba(34, 211, 238, 0.1)' : 'transparent',
+                border: '1px solid',
+                borderColor: showLogs ? '#22D3EE' : '#E2E8F0',
+                borderRadius: '0.5rem',
+                padding: '0.5rem 1rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              {showLogs ? 'Ocultar Logs' : 'Ver Logs'}
+            </button>
+          )}
+
           <button
-            onClick={() => setShowLogs(!showLogs)}
+            onClick={() => setShowDocsModal(true)}
             style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.375rem',
               fontFamily: 'var(--font-inter)',
               fontSize: '0.75rem',
               fontWeight: 500,
-              color: showLogs ? '#22D3EE' : '#94A3B8',
-              backgroundColor: showLogs ? 'rgba(34, 211, 238, 0.1)' : 'transparent',
-              border: '1px solid',
-              borderColor: showLogs ? '#22D3EE' : '#E2E8F0',
-              borderRadius: '0.5rem',
-              padding: '0.5rem 1rem',
+              color: '#3B82F6',
+              background: 'none',
+              border: 'none',
               cursor: 'pointer',
-              transition: 'all 0.2s',
+              padding: 0,
             }}
           >
-            {showLogs ? 'Ocultar Logs' : 'Ver Logs'}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4" />
+              <path d="M12 8h.01" />
+            </svg>
+            Instruções de CSV
           </button>
-        )}
+        </div>
       </div>
 
       {/* Progress Section - Running */}
@@ -895,6 +1038,402 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                 <span style={{ color: '#B91C1C', marginLeft: '0.5rem' }}>{err.error}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Documentação das Colunas */}
+      {showDocsModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            padding: '1rem',
+          }}
+          onClick={() => {
+            setShowDocsModal(false);
+            setSelectedDocPlatform(null);
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '1.5rem',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              maxWidth: '800px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header do Modal */}
+            <div
+              style={{
+                background: 'linear-gradient(to right, #1E293B, #334155)',
+                padding: '1.25rem 1.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div>
+                <h2
+                  style={{
+                    fontFamily: 'var(--font-public-sans)',
+                    fontSize: '1.25rem',
+                    fontWeight: 700,
+                    color: '#FFFFFF',
+                    margin: 0,
+                  }}
+                >
+                  Formato do CSV por Plataforma
+                </h2>
+                <p
+                  style={{
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: '0.875rem',
+                    color: '#CBD5E1',
+                    margin: 0,
+                    marginTop: '0.25rem',
+                  }}
+                >
+                  Verifique as colunas necessárias para importação
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowDocsModal(false);
+                  setSelectedDocPlatform(null);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'rgba(255, 255, 255, 0.7)',
+                  padding: '0.5rem',
+                }}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Tabs de Plataforma */}
+            <div
+              style={{
+                borderBottom: '1px solid #E2E8F0',
+                backgroundColor: '#F8FAFC',
+                padding: '0.75rem 1.5rem',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {Object.entries(CSV_DOCS).map(([key, platform]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedDocPlatform(selectedDocPlatform === key ? null : key)}
+                    style={{
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.875rem',
+                      fontWeight: 500,
+                      color: selectedDocPlatform === key ? '#FFFFFF' : '#64748B',
+                      backgroundColor: selectedDocPlatform === key ? platform.color : '#FFFFFF',
+                      border: selectedDocPlatform === key ? 'none' : '1px solid #E2E8F0',
+                      borderRadius: '0.5rem',
+                      padding: '0.5rem 1rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      transform: selectedDocPlatform === key ? 'scale(1.05)' : 'scale(1)',
+                    }}
+                  >
+                    {platform.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Conteúdo */}
+            <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+              {!selectedDocPlatform ? (
+                <div style={{ textAlign: 'center', padding: '3rem 0' }}>
+                  <div
+                    style={{
+                      width: '64px',
+                      height: '64px',
+                      borderRadius: '50%',
+                      backgroundColor: '#F1F5F9',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto 1rem',
+                    }}
+                  >
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                    </svg>
+                  </div>
+                  <h3
+                    style={{
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '1.125rem',
+                      fontWeight: 500,
+                      color: '#334155',
+                      margin: 0,
+                      marginBottom: '0.5rem',
+                    }}
+                  >
+                    Selecione uma plataforma
+                  </h3>
+                  <p
+                    style={{
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.875rem',
+                      color: '#64748B',
+                      margin: 0,
+                    }}
+                  >
+                    Clique em uma das plataformas acima para ver as colunas necessárias
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                  {/* Info do Status */}
+                  <div
+                    style={{
+                      backgroundColor: '#FFFBEB',
+                      border: '1px solid #FDE68A',
+                      borderRadius: '0.75rem',
+                      padding: '1rem',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" style={{ flexShrink: 0, marginTop: '2px' }}>
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <line x1="12" y1="9" x2="12" y2="13" />
+                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    <div>
+                      <h4
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.875rem',
+                          fontWeight: 600,
+                          color: '#92400E',
+                          margin: 0,
+                          marginBottom: '0.25rem',
+                        }}
+                      >
+                        Filtro de Status
+                      </h4>
+                      <p
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.875rem',
+                          color: '#B45309',
+                          margin: 0,
+                        }}
+                      >
+                        Apenas registros com status{' '}
+                        <code
+                          style={{
+                            backgroundColor: '#FDE68A',
+                            padding: '0.125rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            fontFamily: 'monospace',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          {CSV_DOCS[selectedDocPlatform].statusValue}
+                        </code>{' '}
+                        serão importados.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Tabela de Colunas */}
+                  <div
+                    style={{
+                      border: '1px solid #E2E8F0',
+                      borderRadius: '0.75rem',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        backgroundColor: CSV_DOCS[selectedDocPlatform].color,
+                        padding: '0.75rem 1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <line x1="3" y1="9" x2="21" y2="9" />
+                        <line x1="9" y1="21" x2="9" y2="9" />
+                      </svg>
+                      <span
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.875rem',
+                          fontWeight: 600,
+                          color: '#FFFFFF',
+                        }}
+                      >
+                        Colunas do CSV - {CSV_DOCS[selectedDocPlatform].name}
+                      </span>
+                    </div>
+
+                    {/* Header da tabela */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 2fr 1fr',
+                        gap: '1rem',
+                        padding: '0.75rem 1rem',
+                        backgroundColor: '#F8FAFC',
+                        borderBottom: '1px solid #E2E8F0',
+                      }}
+                    >
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', fontWeight: 600, color: '#64748B', textTransform: 'uppercase' }}>Campo</span>
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', fontWeight: 600, color: '#64748B', textTransform: 'uppercase' }}>Nome da Coluna no CSV</span>
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', textAlign: 'center' }}>Obrigatório</span>
+                    </div>
+
+                    {/* Linhas */}
+                    {CSV_DOCS[selectedDocPlatform].columns.map((col, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 2fr 1fr',
+                          gap: '1rem',
+                          padding: '0.75rem 1rem',
+                          borderBottom: idx < CSV_DOCS[selectedDocPlatform].columns.length - 1 ? '1px solid #F1F5F9' : 'none',
+                          backgroundColor: idx % 2 === 0 ? '#FFFFFF' : '#FAFAFA',
+                        }}
+                      >
+                        <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 500, color: '#334155' }}>{col.field}</span>
+                        <code
+                          style={{
+                            fontFamily: 'monospace',
+                            fontSize: '0.8rem',
+                            color: '#475569',
+                            backgroundColor: '#F1F5F9',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            alignSelf: 'center',
+                          }}
+                        >
+                          {col.column}
+                        </code>
+                        <span style={{ textAlign: 'center' }}>
+                          {col.required ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#16A34A', fontSize: '0.875rem', fontWeight: 500 }}>
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                              </svg>
+                              Sim
+                            </span>
+                          ) : (
+                            <span style={{ color: '#94A3B8', fontSize: '0.875rem' }}>Opcional</span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Dica */}
+                  <div
+                    style={{
+                      backgroundColor: '#EFF6FF',
+                      border: '1px solid #BFDBFE',
+                      borderRadius: '0.75rem',
+                      padding: '1rem',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" strokeWidth="2" style={{ flexShrink: 0, marginTop: '2px' }}>
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 16v-4" />
+                      <path d="M12 8h.01" />
+                    </svg>
+                    <div>
+                      <h4
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.875rem',
+                          fontWeight: 600,
+                          color: '#1E40AF',
+                          margin: 0,
+                          marginBottom: '0.25rem',
+                        }}
+                      >
+                        Dica
+                      </h4>
+                      <p
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.875rem',
+                          color: '#1D4ED8',
+                          margin: 0,
+                        }}
+                      >
+                        Exporte o CSV diretamente da plataforma {CSV_DOCS[selectedDocPlatform].name} com todas as colunas disponíveis.
+                        O sistema irá automaticamente identificar e utilizar as colunas necessárias.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div
+              style={{
+                borderTop: '1px solid #E2E8F0',
+                padding: '1rem 1.5rem',
+                backgroundColor: '#F8FAFC',
+                display: 'flex',
+                justifyContent: 'flex-end',
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowDocsModal(false);
+                  setSelectedDocPlatform(null);
+                }}
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#FFFFFF',
+                  backgroundColor: '#1E293B',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  padding: '0.625rem 1.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Fechar
+              </button>
+            </div>
           </div>
         </div>
       )}
