@@ -15,6 +15,12 @@ interface CsvUploadProps {
   onError?: (error: Error) => void;
 }
 
+interface DebugLog {
+  timestamp: Date;
+  type: 'info' | 'success' | 'error' | 'warning';
+  message: string;
+}
+
 export default function CsvUpload({
   id,
   title,
@@ -28,15 +34,35 @@ export default function CsvUpload({
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [fileName, setFileName] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [estimate, setEstimate] = useState<CsvTimeEstimate | null>(null);
   const [importLock, setImportLock] = useState<ImportLockStatus>({ locked: false });
   const [lockTimeDisplay, setLockTimeDisplay] = useState('');
+
+  // Progress & Debug states
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const debugEndRef = useRef<HTMLDivElement>(null);
 
   const platform = id as CsvPlatform;
+
+  // Auto-scroll debug logs
+  useEffect(() => {
+    if (debugEndRef.current && showDebug) {
+      debugEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [debugLogs, showDebug]);
+
+  const addLog = (type: DebugLog['type'], message: string) => {
+    setDebugLogs(prev => [...prev, { timestamp: new Date(), type, message }]);
+  };
 
   // Subscribe to import lock status
   useEffect(() => {
@@ -61,21 +87,64 @@ export default function CsvUpload({
     return () => clearInterval(interval);
   }, [importLock.locked, importLock.estimatedUnlock]);
 
+  // Simulate progress based on estimate
+  useEffect(() => {
+    if (!isProcessing || !estimate) return;
+
+    const totalSeconds = estimate.estimatedSeconds;
+    const intervalMs = 1000;
+    let elapsed = 0;
+
+    const interval = setInterval(() => {
+      elapsed += 1;
+      const newProgress = Math.min((elapsed / totalSeconds) * 100, 99);
+      setProgress(newProgress);
+
+      // Update progress message
+      const remaining = Math.max(totalSeconds - elapsed, 0);
+      if (remaining > 60) {
+        setProgressMessage(`${Math.ceil(remaining / 60)} minutos restantes`);
+      } else {
+        setProgressMessage(`${remaining} segundos restantes`);
+      }
+
+      // Add periodic log
+      if (elapsed % 10 === 0) {
+        addLog('info', `Processando... ${Math.floor(newProgress)}% concluído`);
+      }
+    }, intervalMs);
+
+    return () => clearInterval(interval);
+  }, [isProcessing, estimate]);
+
   const isLocked = importLock.locked;
   const isDisabled = disabled || isLocked;
 
   const handleFileSelected = async (file: File) => {
+    setError(null);
+    setDebugLogs([]);
+
     if (!file.name.endsWith('.csv')) {
-      alert('Por favor, selecione um arquivo CSV.');
+      setError('Por favor, selecione um arquivo CSV.');
+      addLog('error', 'Arquivo inválido: não é um CSV');
       return;
     }
+
+    addLog('info', `Arquivo selecionado: ${file.name}`);
+    addLog('info', `Tamanho: ${(file.size / 1024).toFixed(2)} KB`);
 
     setSelectedFile(file);
     setFileName(file.name);
 
     // Calculate estimate
+    addLog('info', 'Analisando arquivo...');
     const est = await estimateCsvImportTime(file, platform);
     setEstimate(est);
+
+    addLog('success', `Análise concluída: ${est.totalRows} linhas totais`);
+    addLog('info', `Vendas válidas encontradas: ${est.paidRows}`);
+    addLog('info', `Tempo estimado: ${est.formattedTime}`);
+
     setShowConfirmDialog(true);
   };
 
@@ -84,31 +153,54 @@ export default function CsvUpload({
 
     setShowConfirmDialog(false);
     setIsUploading(true);
+    setIsProcessing(true);
+    setProgress(0);
+    setError(null);
+
+    addLog('info', 'Iniciando upload...');
 
     try {
       // Lock imports globally
+      addLog('info', 'Travando sistema de importações...');
       await lockImport({
         lockedBy: userEmail || 'unknown',
         platform: id,
         estimatedSeconds: estimate.estimatedSeconds,
         message: `Importação ${title} em andamento`,
       });
+      addLog('success', 'Sistema travado com sucesso');
 
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      // Fire and forget
-      fetch(webhookUrl, {
+      addLog('info', `Enviando arquivo para ${webhookUrl}...`);
+
+      // Send request
+      const response = await fetch(webhookUrl, {
         method: 'POST',
         body: formData,
-      }).catch(() => {});
+      });
 
-      setShowSuccessDialog(true);
-      onSuccess?.({ fileName: selectedFile.name, estimate });
-    } catch (error) {
-      onError?.(error instanceof Error ? error : new Error('Erro desconhecido'));
+      addLog('info', `Resposta recebida: HTTP ${response.status}`);
+
+      if (response.ok) {
+        addLog('success', 'Upload enviado com sucesso!');
+        addLog('info', 'O processamento continua em background no servidor.');
+        setProgress(100);
+        setProgressMessage('Concluído!');
+        onSuccess?.({ fileName: selectedFile.name, estimate });
+      } else {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Erro desconhecido';
+      setError(errorMessage);
+      addLog('error', `Erro: ${errorMessage}`);
+      onError?.(err instanceof Error ? err : new Error(errorMessage));
     } finally {
       setIsUploading(false);
+      // Keep isProcessing true so progress bar stays visible
     }
   };
 
@@ -117,6 +209,20 @@ export default function CsvUpload({
     setSelectedFile(null);
     setEstimate(null);
     setFileName('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleReset = () => {
+    setIsProcessing(false);
+    setProgress(0);
+    setProgressMessage('');
+    setFileName('');
+    setSelectedFile(null);
+    setEstimate(null);
+    setError(null);
+    setDebugLogs([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -131,7 +237,7 @@ export default function CsvUpload({
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!isDisabled) setIsDragging(true);
+    if (!isDisabled && !isProcessing) setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -143,7 +249,7 @@ export default function CsvUpload({
     e.preventDefault();
     setIsDragging(false);
 
-    if (isDisabled) return;
+    if (isDisabled || isProcessing) return;
 
     const file = e.dataTransfer.files?.[0];
     if (file) {
@@ -151,30 +257,37 @@ export default function CsvUpload({
     }
   };
 
-  const closeSuccessDialog = () => {
-    setShowSuccessDialog(false);
-    setFileName('');
-    setSelectedFile(null);
-    setEstimate(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+  const getLogColor = (type: DebugLog['type']) => {
+    switch (type) {
+      case 'success': return '#22C55E';
+      case 'error': return '#EF4444';
+      case 'warning': return '#EAB308';
+      default: return '#64748B';
+    }
+  };
+
+  const getLogIcon = (type: DebugLog['type']) => {
+    switch (type) {
+      case 'success': return '✓';
+      case 'error': return '✗';
+      case 'warning': return '⚠';
+      default: return '→';
     }
   };
 
   return (
-    <>
-      <div
-        className="rounded-3xl border border-slate-200 p-6 flex flex-col gap-4"
-        style={{
-          backgroundColor: '#FFFFFF',
-          borderColor: '#E2E8F0',
-          maxWidth: '500px',
-          opacity: disabled ? 0.6 : 1,
-        }}
-      >
-        {/* Header */}
+    <div
+      className="rounded-3xl border border-slate-200 p-6 flex flex-col gap-4"
+      style={{
+        backgroundColor: '#FFFFFF',
+        borderColor: '#E2E8F0',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-1">
             <h3
               style={{
                 fontFamily: 'var(--font-public-sans)',
@@ -214,50 +327,316 @@ export default function CsvUpload({
           </p>
         </div>
 
-        {/* Global Lock Display */}
-        {isLocked && (
-          <div
+        {/* Debug Toggle */}
+        {debugLogs.length > 0 && (
+          <button
+            onClick={() => setShowDebug(!showDebug)}
             style={{
-              padding: '0.75rem 1rem',
-              borderRadius: '0.75rem',
-              backgroundColor: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid #EF4444',
+              fontFamily: 'var(--font-inter)',
+              fontSize: '0.75rem',
+              fontWeight: 500,
+              color: showDebug ? '#22D3EE' : '#94A3B8',
+              backgroundColor: showDebug ? 'rgba(34, 211, 238, 0.1)' : 'transparent',
+              border: '1px solid',
+              borderColor: showDebug ? '#22D3EE' : '#E2E8F0',
+              borderRadius: '0.5rem',
+              padding: '0.25rem 0.75rem',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
             }}
           >
-            <div className="flex items-center gap-2">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            {showDebug ? 'Ocultar Debug' : 'Ver Debug'}
+          </button>
+        )}
+      </div>
+
+      {/* Global Lock Display */}
+      {isLocked && !isProcessing && (
+        <div
+          style={{
+            padding: '0.75rem 1rem',
+            borderRadius: '0.75rem',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid #EF4444',
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            <div>
+              <p
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  color: '#DC2626',
+                  margin: 0,
+                  fontWeight: 500,
+                }}
+              >
+                Importação em andamento
+              </p>
+              <p
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.75rem',
+                  color: '#DC2626',
+                  margin: 0,
+                  opacity: 0.8,
+                }}
+              >
+                {importLock.message} • Liberação em {lockTimeDisplay}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error Display */}
+      {error && (
+        <div
+          style={{
+            padding: '0.75rem 1rem',
+            borderRadius: '0.75rem',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid #EF4444',
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="15" y1="9" x2="9" y2="15" />
+              <line x1="9" y1="9" x2="15" y2="15" />
+            </svg>
+            <div className="flex-1">
+              <p
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  color: '#DC2626',
+                  margin: 0,
+                  fontWeight: 500,
+                }}
+              >
+                Erro na importação
+              </p>
+              <p
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.75rem',
+                  color: '#DC2626',
+                  margin: 0,
+                  opacity: 0.8,
+                }}
+              >
+                {error}
+              </p>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-              <div>
-                <p
-                  style={{
-                    fontFamily: 'var(--font-inter)',
-                    fontSize: '0.875rem',
-                    color: '#DC2626',
-                    margin: 0,
-                    fontWeight: 500,
-                  }}
-                >
-                  Importação em andamento
-                </p>
-                <p
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Progress Section */}
+      {isProcessing && (
+        <div
+          style={{
+            padding: '1rem',
+            borderRadius: '0.75rem',
+            backgroundColor: '#F8FAFC',
+            border: '1px solid #E2E8F0',
+          }}
+        >
+          {/* File Info */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22D3EE" strokeWidth="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+              </svg>
+              <span
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  color: '#314158',
+                  fontWeight: 500,
+                }}
+              >
+                {fileName}
+              </span>
+            </div>
+            {progress >= 100 && (
+              <button
+                onClick={handleReset}
+                style={{
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.75rem',
+                  color: '#64748B',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                Nova importação
+              </button>
+            )}
+          </div>
+
+          {/* Progress Bar */}
+          <div
+            style={{
+              height: '8px',
+              backgroundColor: '#E2E8F0',
+              borderRadius: '4px',
+              overflow: 'hidden',
+              marginBottom: '0.5rem',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${progress}%`,
+                backgroundColor: progress >= 100 ? '#22C55E' : '#22D3EE',
+                borderRadius: '4px',
+                transition: 'width 0.3s ease, background-color 0.3s ease',
+              }}
+            />
+          </div>
+
+          {/* Progress Info */}
+          <div className="flex items-center justify-between">
+            <span
+              style={{
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.75rem',
+                color: progress >= 100 ? '#22C55E' : '#64748B',
+                fontWeight: 500,
+              }}
+            >
+              {progress >= 100 ? '✓ Enviado com sucesso!' : progressMessage}
+            </span>
+            <span
+              style={{
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.75rem',
+                color: '#94A3B8',
+              }}
+            >
+              {Math.floor(progress)}%
+            </span>
+          </div>
+
+          {/* Estimate Info */}
+          {estimate && (
+            <div
+              style={{
+                marginTop: '0.75rem',
+                paddingTop: '0.75rem',
+                borderTop: '1px solid #E2E8F0',
+              }}
+            >
+              <div className="flex items-center gap-4">
+                <span
                   style={{
                     fontFamily: 'var(--font-inter)',
                     fontSize: '0.75rem',
-                    color: '#DC2626',
-                    margin: 0,
-                    opacity: 0.8,
+                    color: '#64748B',
                   }}
                 >
-                  {importLock.message} • Liberação em {lockTimeDisplay}
-                </p>
+                  📊 {estimate.paidRows} vendas
+                </span>
+                <span
+                  style={{
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: '0.75rem',
+                    color: '#64748B',
+                  }}
+                >
+                  ⏱️ {estimate.formattedTime}
+                </span>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+      )}
 
-        {/* Drop Zone */}
+      {/* Debug Console */}
+      {showDebug && debugLogs.length > 0 && (
+        <div
+          style={{
+            backgroundColor: '#1E293B',
+            borderRadius: '0.75rem',
+            padding: '0.75rem',
+            maxHeight: '200px',
+            overflowY: 'auto',
+          }}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span
+              style={{
+                fontFamily: 'monospace',
+                fontSize: '0.625rem',
+                color: '#94A3B8',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Console Debug
+            </span>
+            <button
+              onClick={() => setDebugLogs([])}
+              style={{
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.625rem',
+                color: '#64748B',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Limpar
+            </button>
+          </div>
+          {debugLogs.map((log, index) => (
+            <div
+              key={index}
+              style={{
+                fontFamily: 'monospace',
+                fontSize: '0.75rem',
+                color: getLogColor(log.type),
+                marginBottom: '0.25rem',
+                display: 'flex',
+                gap: '0.5rem',
+              }}
+            >
+              <span style={{ color: '#64748B' }}>
+                {log.timestamp.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+              <span>{getLogIcon(log.type)}</span>
+              <span>{log.message}</span>
+            </div>
+          ))}
+          <div ref={debugEndRef} />
+        </div>
+      )}
+
+      {/* Drop Zone - only show when not processing */}
+      {!isProcessing && (
         <div
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -346,7 +725,7 @@ export default function CsvUpload({
             </div>
           )}
         </div>
-      </div>
+      )}
 
       {/* Confirmation Dialog */}
       {showConfirmDialog && estimate && (
@@ -494,92 +873,6 @@ export default function CsvUpload({
           </div>
         </div>
       )}
-
-      {/* Success Dialog */}
-      {showSuccessDialog && (
-        <div
-          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-          onClick={closeSuccessDialog}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-lg p-8 max-w-sm w-full mx-4 text-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Success Icon */}
-            <div
-              className="mx-auto mb-4 flex items-center justify-center"
-              style={{
-                width: '64px',
-                height: '64px',
-                borderRadius: '50%',
-                backgroundColor: 'rgba(34, 197, 94, 0.1)',
-              }}
-            >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#22C55E" strokeWidth="2.5">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                <polyline points="22 4 12 14.01 9 11.01" />
-              </svg>
-            </div>
-
-            <h3
-              style={{
-                fontFamily: 'var(--font-public-sans)',
-                fontWeight: 600,
-                fontSize: '1.25rem',
-                color: '#314158',
-                margin: 0,
-                marginBottom: '0.5rem',
-              }}
-            >
-              Importação iniciada!
-            </h3>
-
-            <p
-              style={{
-                fontFamily: 'var(--font-inter)',
-                fontSize: '0.875rem',
-                color: '#64748B',
-                margin: 0,
-                marginBottom: '0.5rem',
-              }}
-            >
-              O arquivo <strong>{fileName}</strong> está sendo processado.
-            </p>
-
-            {estimate && (
-              <p
-                style={{
-                  fontFamily: 'var(--font-inter)',
-                  fontSize: '0.75rem',
-                  color: '#94A3B8',
-                  margin: 0,
-                  marginBottom: '1.5rem',
-                }}
-              >
-                Tempo estimado: {estimate.formattedTime}
-              </p>
-            )}
-
-            <button
-              onClick={closeSuccessDialog}
-              style={{
-                fontFamily: 'var(--font-inter)',
-                fontSize: '0.875rem',
-                fontWeight: 500,
-                color: '#FFFFFF',
-                backgroundColor: '#22D3EE',
-                border: 'none',
-                borderRadius: '0.75rem',
-                padding: '0.75rem 2rem',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s',
-              }}
-            >
-              Entendi
-            </button>
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }

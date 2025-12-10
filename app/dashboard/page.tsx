@@ -11,7 +11,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import Button from '@/components/Button';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import CsvUpload from '@/components/CsvUpload';
+import CsvUploadUnified from '@/components/CsvUploadUnified';
+import EtiquetasUpload from '@/components/EtiquetasUpload';
 
 interface MenuItem {
   id: string;
@@ -421,6 +422,16 @@ export default function DashboardPage() {
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
           <polyline points="15 3 21 3 21 9" />
           <line x1="10" y1="14" x2="21" y2="3" />
+        </svg>
+      ),
+    },
+    {
+      id: 'etiquetas',
+      label: 'Etiquetas',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+          <line x1="7" y1="7" x2="7.01" y2="7" />
         </svg>
       ),
     },
@@ -1470,100 +1481,21 @@ export default function DashboardPage() {
         {/* Integrações Page */}
         {activeMenu === 'integracoes' && (
           <div className="flex-1 overflow-auto px-4 md:px-[110px] pt-6 pb-8" style={{ backgroundColor: '#F8FAFC' }}>
-            <div className="flex flex-col gap-6">
-              {/* Page Description */}
-              <div>
-                <p
-                  style={{
-                    fontFamily: 'var(--font-inter)',
-                    fontSize: '0.875rem',
-                    color: '#64748B',
-                    margin: 0,
-                    maxWidth: '600px',
-                  }}
-                >
-                  Gerencie suas integrações com plataformas externas. Importe dados de outras ferramentas para sincronizar com o sistema.
-                </p>
-              </div>
-
-              {/* CSV Upload Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                <CsvUpload
-                  id="hotmart"
-                  title="Importar CSV Hotmart"
-                  description="Faça upload do arquivo CSV exportado da Hotmart para sincronizar os dados."
-                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-hotmart-csv"
-                  userEmail={userEmail}
-                  onSuccess={(result) => {
-                    console.log('Upload Hotmart success:', result);
-                  }}
-                  onError={(error) => {
-                    console.error('Upload Hotmart error:', error);
-                  }}
-                />
-
-                <CsvUpload
-                  id="eduzz"
-                  title="Importar CSV Eduzz"
-                  description="Faça upload do arquivo CSV exportado da Eduzz para sincronizar os dados."
-                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-eduzz-csv"
-                  userEmail={userEmail}
-                  onSuccess={(result) => {
-                    console.log('Upload Eduzz success:', result);
-                  }}
-                  onError={(error) => {
-                    console.error('Upload Eduzz error:', error);
-                  }}
-                />
-
-                <CsvUpload
-                  id="hubla"
-                  title="Importar CSV Hubla"
-                  description="Faça upload do arquivo CSV exportado da Hubla para sincronizar os dados."
-                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-hubla-csv"
-                  userEmail={userEmail}
-                  onSuccess={(result) => {
-                    console.log('Upload Hubla success:', result);
-                  }}
-                  onError={(error) => {
-                    console.error('Upload Hubla error:', error);
-                  }}
-                />
-
-                <CsvUpload
-                  id="kiwify"
-                  title="Importar CSV Kiwify"
-                  description="Faça upload do arquivo CSV exportado da Kiwify para sincronizar os dados."
-                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-kiwify-csv"
-                  userEmail={userEmail}
-                  onSuccess={(result) => {
-                    console.log('Upload Kiwify success:', result);
-                  }}
-                  onError={(error) => {
-                    console.error('Upload Kiwify error:', error);
-                  }}
-                />
-
-                <CsvUpload
-                  id="woocommerce"
-                  title="Importar CSV WooCommerce"
-                  description="Faça upload do arquivo CSV exportado do WooCommerce para sincronizar os dados."
-                  webhookUrl="https://n8n.hubfy.brandinglab.com.br/webhook/import-woo-csv"
-                  userEmail={userEmail}
-                  onSuccess={(result) => {
-                    console.log('Upload WooCommerce success:', result);
-                  }}
-                  onError={(error) => {
-                    console.error('Upload WooCommerce error:', error);
-                  }}
-                />
-              </div>
+            <div className="flex flex-col items-center justify-center min-h-full">
+              <CsvUploadUnified userEmail={userEmail} />
             </div>
           </div>
         )}
 
+        {/* Etiquetas Page */}
+        {activeMenu === 'etiquetas' && (
+          <div className="flex-1 overflow-auto px-4 md:px-[110px] pt-6 pb-8" style={{ backgroundColor: '#F8FAFC' }}>
+            <EtiquetasUpload />
+          </div>
+        )}
+
         {/* Placeholder for other menu items */}
-        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && (
+        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && activeMenu !== 'etiquetas' && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="text-center">
               <h2 className="text-2xl font-semibold text-slate-900 mb-2">
