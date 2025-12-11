@@ -21,9 +21,18 @@ interface EtiquetaData {
     nome: string;
     telefone: string;
     email: string;
+    logradouro: string;
+    numero: string;
+    complemento: string;
+    bairro: string;
     cidade: string;
     uf: string;
+    cep: string;
   };
+  // Campos para pedidos mesclados
+  isMerged?: boolean;
+  mergedTransactionIds?: string[];
+  produtos?: string[];
 }
 
 interface WebhookRequest {
@@ -131,8 +140,13 @@ export async function POST(request: NextRequest) {
         clienteNome: e.destinatario.nome,
         clienteTelefone: clienteTelefone,
         clienteEmail: e.destinatario.email,
+        clienteLogradouro: e.destinatario.logradouro,
+        clienteNumero: e.destinatario.numero,
+        clienteComplemento: e.destinatario.complemento,
+        clienteBairro: e.destinatario.bairro,
         clienteCidade: e.destinatario.cidade,
         clienteUf: e.destinatario.uf,
+        clienteCep: e.destinatario.cep,
       };
     });
 
@@ -144,9 +158,18 @@ export async function POST(request: NextRequest) {
       produto: e.produto,
       clienteNome: e.destinatario.nome,
       clienteEmail: e.destinatario.email,
+      clienteLogradouro: e.destinatario.logradouro,
+      clienteNumero: e.destinatario.numero,
+      clienteComplemento: e.destinatario.complemento,
+      clienteBairro: e.destinatario.bairro,
       clienteCidade: e.destinatario.cidade,
       clienteUf: e.destinatario.uf,
+      clienteCep: e.destinatario.cep,
       isNova: etiquetasNovas.some(n => n.codigo === e.codigo),
+      // Campos de merge
+      isMerged: e.isMerged || false,
+      mergedTransactionIds: e.mergedTransactionIds || [],
+      produtos: e.produtos || [],
     }));
 
     // Filtrar etiquetas NOVAS que têm telefone válido (para envio ao cliente)
@@ -174,6 +197,13 @@ export async function POST(request: NextRequest) {
         mensagemAdmin += `👤 ${e.clienteNome}\n`;
         mensagemAdmin += `📍 ${e.clienteCidade}/${e.clienteUf}\n`;
         mensagemAdmin += `📦 ${e.produto}\n`;
+        // Adicionar info de merge se aplicável
+        if (e.isMerged && e.mergedTransactionIds && e.mergedTransactionIds.length > 1) {
+          mensagemAdmin += `🔗 *MESCLADO (${e.mergedTransactionIds.length} pedidos):*\n`;
+          e.mergedTransactionIds.forEach((tid: string) => {
+            mensagemAdmin += `   • ${tid}\n`;
+          });
+        }
       });
     }
 
@@ -184,6 +214,13 @@ export async function POST(request: NextRequest) {
         mensagemAdmin += `👤 ${e.clienteNome}\n`;
         mensagemAdmin += `📍 ${e.clienteCidade}/${e.clienteUf}\n`;
         mensagemAdmin += `📦 ${e.produto}\n`;
+        // Adicionar info de merge se aplicável
+        if (e.isMerged && e.mergedTransactionIds && e.mergedTransactionIds.length > 1) {
+          mensagemAdmin += `🔗 *MESCLADO (${e.mergedTransactionIds.length} pedidos):*\n`;
+          e.mergedTransactionIds.forEach((tid: string) => {
+            mensagemAdmin += `   • ${tid}\n`;
+          });
+        }
       });
     }
 
