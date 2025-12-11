@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const VIPP_CONFIG = {
-  url: 'http://vpsrv.visualset.com.br/api/v1/middleware/PostarObjeto',
-  // Credenciais de produção
-  usuario: 'onbiws',
-  token: '112233',
-  idPerfil: '9363',
+  url: process.env.VIPP_API_URL || 'http://vpsrv.visualset.com.br/api/v1/middleware/PostarObjeto',
+  usuario: process.env.VIPP_USUARIO || '',
+  token: process.env.VIPP_SENHA || '',
+  idPerfil: process.env.VIPP_ID_PERFIL || '',
+  // Contrato ECT (produção)
+  servicoEct: process.env.VIPP_SERVICO_ECT || '',
+  nrContrato: process.env.VIPP_NR_CONTRATO || '',
+  codAdministrativo: process.env.VIPP_COD_ADMINISTRATIVO || '',
+  nrCartao: process.env.VIPP_NR_CARTAO || '',
 };
 
 interface DestinatarioData {
@@ -24,13 +28,14 @@ interface DestinatarioData {
 
 interface PostarObjetoRequest {
   transactionId: string;
+  servicoEct?: string; // Código do serviço ECT (opcional, usa env se não fornecido)
   destinatario: DestinatarioData;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: PostarObjetoRequest = await request.json();
-    const { transactionId, destinatario } = body;
+    const { transactionId, servicoEct, destinatario } = body;
 
     if (!transactionId || !destinatario) {
       return NextResponse.json(
@@ -38,6 +43,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Usar servicoEct do request ou fallback para env
+    const servicoEctFinal = servicoEct || VIPP_CONFIG.servicoEct;
 
     // Montar payload para ViPP conforme documentação REST/JSON
     const vippPayload = {
@@ -47,9 +55,9 @@ export async function POST(request: NextRequest) {
         IdPerfil: VIPP_CONFIG.idPerfil,
       },
       ContratoEct: {
-        NrContrato: '',
-        CodigoAdministrativo: '',
-        NrCartao: '',
+        NrContrato: VIPP_CONFIG.nrContrato,
+        CodigoAdministrativo: VIPP_CONFIG.codAdministrativo,
+        NrCartao: VIPP_CONFIG.nrCartao,
       },
       Destinatario: {
         CnpjCpf: destinatario.documento?.replace(/\D/g, '') || '',
@@ -68,7 +76,7 @@ export async function POST(request: NextRequest) {
         Email: destinatario.email || '',
       },
       Servico: {
-        ServicoECT: '', // Deixar vazio para usar o perfil
+        ServicoECT: servicoEctFinal, // Usa o serviço do request ou fallback para env
       },
       NotasFiscais: [
         {

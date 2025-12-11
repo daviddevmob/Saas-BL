@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const VIPP_PRINT_CONFIG = {
-  url: 'https://vipp.visualset.com.br/vipp/remoto/ImpressaoRemota.php',
-  usuario: 'onbiws',
-  senha: '112233',
+  url: `${process.env.VIPP_URL || 'https://vipp.visualset.com.br/vipp/remoto'}/ImpressaoRemota.php`,
+  usuario: process.env.VIPP_USUARIO || '',
+  senha: process.env.VIPP_SENHA || '',
 };
 
 interface ImprimirRequest {

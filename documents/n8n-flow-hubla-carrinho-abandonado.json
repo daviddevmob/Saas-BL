@@ -1,0 +1,173 @@
+{
+  "name": "Hubla - Carrinho Abandonado → Firebase",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hubla-carrinho-abandonado",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "webhook-hubla",
+      "name": "Webhook Hubla",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "hubla-carrinho-abandonado"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "email",
+              "value": "={{ $json.body.event.lead.email || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "telefone",
+              "value": "={{ $json.body.event.lead.phone || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "nome",
+              "value": "={{ $json.body.event.lead.fullName || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "produto_id",
+              "value": "={{ $json.body.event.products[0]?.id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "produto_nome",
+              "value": "={{ $json.body.event.products[0]?.name || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "6",
+              "name": "plataforma",
+              "value": "hubla",
+              "type": "string"
+            },
+            {
+              "id": "7",
+              "name": "data_abandono",
+              "value": "={{ $json.body.event.lead.createdAt || new Date().toISOString() }}",
+              "type": "string"
+            },
+            {
+              "id": "8",
+              "name": "status",
+              "value": "pendente",
+              "type": "string"
+            },
+            {
+              "id": "9",
+              "name": "status_atualizado_em",
+              "value": "={{ new Date().toISOString() }}",
+              "type": "string"
+            },
+            {
+              "id": "10",
+              "name": "hubla_lead_id",
+              "value": "={{ $json.body.event.lead.id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "11",
+              "name": "url_checkout",
+              "value": "={{ $json.body.event.lead.session?.url || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "12",
+              "name": "utm_source",
+              "value": "={{ $json.body.event.lead.session?.utm?.source || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "13",
+              "name": "utm_campaign",
+              "value": "={{ $json.body.event.lead.session?.utm?.campaign || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-campos-hubla",
+      "name": "Formatar Dados",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "value": "bl-saas",
+          "mode": "list",
+          "cachedResultName": "bl-saas"
+        },
+        "database": "(default)",
+        "collection": "carrinhos_abandonados",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "firestore-save-hubla",
+      "name": "Salvar no Firestore",
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 2,
+      "position": [690, 300],
+      "credentials": {
+        "googleFirebaseCloudFirestoreOAuth2Api": {
+          "id": "SUA_CREDENCIAL_ID",
+          "name": "Google Firebase Cloud Firestore account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Hubla": {
+      "main": [
+        [
+          {
+            "node": "Formatar Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Dados": {
+      "main": [
+        [
+          {
+            "node": "Salvar no Firestore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "pinData": {}
+}

@@ -1,0 +1,220 @@
+{
+  "name": "Etiquetas WhatsApp - Evolution API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "etiquetas",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Etiquetas",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "etiquetas-webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Webhook recebido\" }",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Responder Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendText/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.body.adminPhone }}\",\n  \"text\": \"📦 *Etiquetas Geradas*\\n\\nTotal: {{ $json.body.total }} etiqueta(s)\\n\\n{{ $json.body.resumo.mensagem }}\"\n}"
+      },
+      "id": "send-admin-text",
+      "name": "Enviar Texto Admin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 350]
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "id": "delay-admin",
+      "name": "Delay Admin 1s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [650, 350]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendMedia/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('Webhook Etiquetas').item.json.body.adminPhone }}\",\n  \"mediatype\": \"document\",\n  \"media\": \"https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf\",\n  \"caption\": \"📄 Etiquetas ({{ $('Webhook Etiquetas').item.json.body.total }})\",\n  \"fileName\": \"etiquetas.pdf\"\n}"
+      },
+      "id": "send-admin-pdf",
+      "name": "Enviar PDF Admin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 350]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.etiquetas",
+        "options": {}
+      },
+      "id": "split-etiquetas",
+      "name": "Split Etiquetas",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [450, 550]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendText/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.clienteTelefone }}\",\n  \"text\": \"Olá {{ $json.clienteNome }}! 📦\\n\\nSua etiqueta de envio foi gerada!\\n\\n🏷️ *Código de Rastreio:*\\n{{ $json.codigo }}\\n\\nVocê pode acompanhar seu pedido pelo site dos Correios.\\n\\nObrigado pela compra! 🙏\"\n}"
+      },
+      "id": "send-client-text",
+      "name": "Enviar Texto Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 550]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "delay-between-clients",
+      "name": "Delay Entre Clientes 2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [850, 550]
+    }
+  ],
+  "connections": {
+    "Webhook Etiquetas": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Enviar Texto Admin",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split Etiquetas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Texto Admin": {
+      "main": [
+        [
+          {
+            "node": "Delay Admin 1s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay Admin 1s": {
+      "main": [
+        [
+          {
+            "node": "Enviar PDF Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Etiquetas": {
+      "main": [
+        [
+          {
+            "node": "Enviar Texto Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Texto Cliente": {
+      "main": [
+        [
+          {
+            "node": "Delay Entre Clientes 2s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

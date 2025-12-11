@@ -1,50 +1,26 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { db } from '@/lib/firebase';
-import { doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
 import Image from 'next/image';
 
-interface ImportLock {
-  isLocked: boolean;
-  platform: string;
-  fileName: string;
-  startedAt: Date;
+interface JobData {
+  id: string;
+  tipo: string;
+  status: 'pendente' | 'processando' | 'concluido' | 'erro' | 'cancelado';
+  plataforma: string;
+  arquivo: string;
   total: number;
-  processed: number;
-  created: number;
-  exists: number;
-  errors: number;
-  skipped: number;
-  status: 'running' | 'completed' | 'error' | 'cancelled';
-  message: string;
-  errorLog: Array<{ email: string; name: string; error: string }>;
-}
-
-interface ProgressEvent {
-  type: 'status' | 'init' | 'progress' | 'complete' | 'error';
-  message?: string;
-  index?: number;
-  total?: number;
-  status?: string;
-  email?: string;
-  name?: string;
-  value?: number;
-  stats?: {
-    created: number;
-    exists: number;
-    updated: number;
-    errors: number;
-    skipped: number;
-  };
-  created?: number;
-  exists?: number;
-  updated?: number;
-  errors?: number;
-  skipped?: number;
-  platform?: string;
-  fileName?: string;
-  filtered?: number;
+  totalOriginal: number;
+  processados: number;
+  sucessos: number;
+  erros: number;
+  ignorados: number;
+  criadoEm: string;
+  atualizadoEm: string;
+  mensagem: string;
+  errosDetalhes: Array<{ email: string; name: string; error: string }>;
 }
 
 interface Platform {
@@ -178,88 +154,92 @@ const CSV_DOCS: Record<string, {
   },
 };
 
-const LOCK_DOC = 'import-csv-lock';
-const LOCK_COLLECTION = 'system';
-
-interface LogEntry {
-  type: string;
-  message: string;
-  time: Date;
-}
+const JOBS_COLLECTION = 'jobs_importacao';
 
 interface CsvUploadUnifiedProps {
   userEmail?: string;
 }
 
 export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
-  const [lock, setLock] = useState<ImportLock | null>(null);
+  const [activeJob, setActiveJob] = useState<JobData | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>(PLATFORMS[0]);
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const delay = 1500; // Delay padrão entre registros (ms)
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [showLogs, setShowLogs] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showDocsModal, setShowDocsModal] = useState(false);
   const [selectedDocPlatform, setSelectedDocPlatform] = useState<string | null>(null);
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelConfirmText, setCancelConfirmText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Escutar mudanças no lock do Firebase
+  // Escutar jobs ativos no Firebase (tempo real)
   useEffect(() => {
-    const lockRef = doc(db, LOCK_COLLECTION, LOCK_DOC);
-    const unsubscribe = onSnapshot(lockRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setLock({
-          ...data,
-          startedAt: data.startedAt?.toDate() || new Date(),
-          errorLog: data.errorLog || [],
-        } as ImportLock);
+    // Query simples sem orderBy para evitar necessidade de índice composto
+    const jobsQuery = query(
+      collection(db, JOBS_COLLECTION),
+      where('status', 'in', ['pendente', 'processando'])
+    );
+
+    const unsubscribe = onSnapshot(jobsQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        // Ordenar no cliente e pegar o mais recente
+        const jobs = snapshot.docs
+          .map(doc => ({ ...doc.data(), id: doc.id } as JobData))
+          .sort((a, b) => new Date(b.criadoEm).getTime() - new Date(a.criadoEm).getTime());
+        setActiveJob(jobs[0]);
       } else {
-        setLock(null);
+        setActiveJob(null);
       }
     });
 
     return () => unsubscribe();
   }, []);
 
-  // Auto-scroll logs
+  // Escutar job específico quando ativo
   useEffect(() => {
-    if (showLogs) {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs, showLogs]);
+    if (!activeJob?.id) return;
 
-  const addLog = useCallback((type: string, message: string) => {
-    setLogs(prev => [...prev.slice(-200), { type, message, time: new Date() }]);
-  }, []);
-
-  const updateFirebaseLock = async (data: Partial<ImportLock>) => {
-    const lockRef = doc(db, LOCK_COLLECTION, LOCK_DOC);
-    await setDoc(lockRef, {
-      ...data,
-      lastUpdate: new Date(),
-    }, { merge: true });
-  };
-
-  const releaseLock = async (status: 'completed' | 'error' | 'cancelled', message?: string) => {
-    await updateFirebaseLock({
-      isLocked: false,
-      status,
-      message: message || (status === 'completed' ? 'Importação concluída' : status === 'error' ? 'Erro na importação' : 'Importação cancelada'),
+    const jobRef = doc(db, JOBS_COLLECTION, activeJob.id);
+    const unsubscribe = onSnapshot(jobRef, (snap) => {
+      if (snap.exists()) {
+        setActiveJob({ ...snap.data(), id: snap.id } as JobData);
+      }
     });
+
+    return () => unsubscribe();
+  }, [activeJob?.id]);
+
+  const clearJob = async () => {
+    if (activeJob?.id) {
+      await deleteDoc(doc(db, JOBS_COLLECTION, activeJob.id));
+      setActiveJob(null);
+    }
   };
 
-  const forceReleaseLock = async () => {
-    const lockRef = doc(db, LOCK_COLLECTION, LOCK_DOC);
-    await deleteDoc(lockRef);
-    setLogs([]);
+  const openCancelModal = () => {
+    setCancelConfirmText('');
+    setShowCancelModal(true);
+  };
+
+  const confirmCancelJob = async () => {
+    if (cancelConfirmText !== 'CANCELAR') return;
+
+    if (activeJob?.id && isRunning) {
+      const { updateDoc } = await import('firebase/firestore');
+      await updateDoc(doc(db, JOBS_COLLECTION, activeJob.id), {
+        status: 'cancelado',
+        atualizadoEm: new Date().toISOString(),
+        mensagem: '⛔ Cancelado pelo usuário',
+      });
+    }
+    setShowCancelModal(false);
+    setCancelConfirmText('');
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!lock?.isLocked) setIsDragging(true);
+    if (!isRunning) setIsDragging(true);
   };
 
   const handleDragLeave = () => {
@@ -272,6 +252,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
     const droppedFile = e.dataTransfer.files[0];
     if (droppedFile?.name.endsWith('.csv')) {
       setFile(droppedFile);
+      setError(null);
     }
   };
 
@@ -279,156 +260,50 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       setFile(selectedFile);
+      setError(null);
     }
-  };
-
-  const cancelImport = async () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    await releaseLock('cancelled', 'Importação cancelada pelo usuário');
-    addLog('warning', 'Importação cancelada');
   };
 
   const startImport = async () => {
-    if (!file || lock?.isLocked) return;
+    if (!file || isStarting || isRunning) return;
 
-    // Criar lock no Firebase
-    await updateFirebaseLock({
-      isLocked: true,
-      platform: selectedPlatform.id,
-      fileName: file.name,
-      startedAt: new Date(),
-      total: 0,
-      processed: 0,
-      created: 0,
-      exists: 0,
-      errors: 0,
-      skipped: 0,
-      status: 'running',
-      message: 'Iniciando importação...',
-      errorLog: [],
-    });
-
-    setLogs([]);
-    setShowLogs(true);
-    addLog('info', `Iniciando importação: ${file.name}`);
-    addLog('info', `Plataforma: ${selectedPlatform.name}`);
+    setIsStarting(true);
+    setError(null);
 
     const formData = new FormData();
     formData.append('file', file);
     formData.append('platform', selectedPlatform.id);
-    formData.append('delay', delay.toString());
-
-    abortControllerRef.current = new AbortController();
+    formData.append('delay', '1500');
 
     try {
-      const response = await fetch('/api/import-csv', {
+      const response = await fetch('/api/import-csv/iniciar', {
         method: 'POST',
         body: formData,
-        signal: abortControllerRef.current.signal,
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      const data = await response.json();
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No reader');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      const errorLog: Array<{ email: string; name: string; error: string }> = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event: ProgressEvent = JSON.parse(line.slice(6));
-
-              if (event.type === 'status') {
-                addLog('info', event.message || '');
-                await updateFirebaseLock({ message: event.message });
-              }
-
-              if (event.type === 'init') {
-                addLog('info', `Total: ${event.total} registros (${event.filtered} filtrados)`);
-                await updateFirebaseLock({
-                  total: event.total,
-                  message: event.message,
-                });
-              }
-
-              if (event.type === 'progress') {
-                const stats = event.stats!;
-                const statusIcon = event.status === 'created' ? '✅' :
-                                   event.status === 'exists' ? '⏭️' :
-                                   event.status === 'error' ? '❌' :
-                                   event.status === 'lead_created' ? '👤' :
-                                   event.status === 'skipped' ? '⚠️' : '•';
-
-                addLog(event.status === 'error' ? 'error' : 'info',
-                  `${statusIcon} [${event.index}/${event.total}] ${event.email || ''} - ${event.message}`);
-
-                if (event.status === 'error') {
-                  errorLog.push({
-                    email: event.email || '',
-                    name: event.name || '',
-                    error: event.message || '',
-                  });
-                }
-
-                await updateFirebaseLock({
-                  processed: event.index,
-                  created: stats.created,
-                  exists: stats.exists,
-                  errors: stats.errors,
-                  skipped: stats.skipped,
-                  message: `${event.index}/${event.total} - ${event.message}`,
-                  errorLog: errorLog.slice(-50),
-                });
-              }
-
-              if (event.type === 'complete') {
-                addLog('success', `Concluído! Criados: ${event.created}, Existentes: ${event.exists}, Erros: ${event.errors}`);
-                await releaseLock('completed', event.message);
-                setFile(null);
-              }
-
-              if (event.type === 'error') {
-                addLog('error', event.message || 'Erro desconhecido');
-                await releaseLock('error', event.message);
-              }
-
-            } catch {
-              // ignore parse errors
-            }
-          }
+      if (!data.success) {
+        setError(data.error || 'Erro ao iniciar importação');
+        if (data.debug) {
+          console.log('Debug:', data.debug);
         }
+      } else {
+        setFile(null);
+        // Job será detectado automaticamente pelo onSnapshot
       }
-
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
-        return;
-      }
-      const errorMsg = e instanceof Error ? e.message : 'Erro desconhecido';
-      addLog('error', `Erro: ${errorMsg}`);
-      await releaseLock('error', errorMsg);
+      setError(e instanceof Error ? e.message : 'Erro ao iniciar importação');
     }
 
-    abortControllerRef.current = null;
+    setIsStarting(false);
   };
 
-  const progress = lock?.total ? Math.round((lock.processed / lock.total) * 100) : 0;
-  const isRunning = lock?.isLocked && lock.status === 'running';
+  const isRunning = activeJob?.status === 'processando' || activeJob?.status === 'pendente';
+  const isCompleted = activeJob?.status === 'concluido';
+  const isError = activeJob?.status === 'erro';
+  const isCancelled = activeJob?.status === 'cancelado';
+  const progress = activeJob?.total ? Math.round((activeJob.processados / activeJob.total) * 100) : 0;
 
   return (
     <div
@@ -467,57 +342,33 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          {/* Debug Toggle */}
-          {logs.length > 0 && (
-            <button
-              onClick={() => setShowLogs(!showLogs)}
-              style={{
-                fontFamily: 'var(--font-inter)',
-                fontSize: '0.75rem',
-                fontWeight: 500,
-                color: showLogs ? '#22D3EE' : '#94A3B8',
-                backgroundColor: showLogs ? 'rgba(34, 211, 238, 0.1)' : 'transparent',
-                border: '1px solid',
-                borderColor: showLogs ? '#22D3EE' : '#E2E8F0',
-                borderRadius: '0.5rem',
-                padding: '0.5rem 1rem',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-            >
-              {showLogs ? 'Ocultar Logs' : 'Ver Logs'}
-            </button>
-          )}
-
-          <button
-            onClick={() => setShowDocsModal(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.375rem',
-              fontFamily: 'var(--font-inter)',
-              fontSize: '0.75rem',
-              fontWeight: 500,
-              color: '#3B82F6',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: 0,
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 16v-4" />
-              <path d="M12 8h.01" />
-            </svg>
-            Instruções de CSV
-          </button>
-        </div>
+        <button
+          onClick={() => setShowDocsModal(true)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.375rem',
+            fontFamily: 'var(--font-inter)',
+            fontSize: '0.75rem',
+            fontWeight: 500,
+            color: '#3B82F6',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4" />
+            <path d="M12 8h.01" />
+          </svg>
+          Instruções de CSV
+        </button>
       </div>
 
       {/* Progress Section - Running */}
-      {isRunning && (
+      {isRunning && activeJob && (
         <div
           style={{
             padding: '1.5rem',
@@ -558,26 +409,22 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                     margin: 0,
                   }}
                 >
-                  {lock.platform.toUpperCase()} • {lock.fileName}
+                  {activeJob.plataforma.toUpperCase()} • {activeJob.arquivo}
                 </p>
               </div>
             </div>
-            <button
-              onClick={cancelImport}
+            <span
               style={{
                 fontFamily: 'var(--font-inter)',
-                fontSize: '0.75rem',
-                fontWeight: 500,
-                color: '#FFFFFF',
-                backgroundColor: '#EF4444',
-                border: 'none',
-                borderRadius: '0.5rem',
-                padding: '0.5rem 1rem',
-                cursor: 'pointer',
+                fontSize: '0.625rem',
+                color: '#64748B',
+                backgroundColor: '#F1F5F9',
+                padding: '0.25rem 0.5rem',
+                borderRadius: '0.25rem',
               }}
             >
-              Cancelar
-            </button>
+              ID: {activeJob.id.substring(0, 8)}
+            </span>
           </div>
 
           {/* Progress Bar */}
@@ -604,7 +451,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           {/* Progress Info */}
           <div className="flex items-center justify-between mb-3">
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', color: '#92400E' }}>
-              {lock.processed} / {lock.total}
+              {activeJob.processados} / {activeJob.total}
             </span>
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', color: '#92400E', fontWeight: 600 }}>
               {progress}%
@@ -612,50 +459,211 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           </div>
 
           {/* Stats */}
-          <div className="flex gap-4 flex-wrap">
+          <div className="flex gap-4 flex-wrap mb-3">
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#16A34A' }}>
-              ✅ {lock.created} criados
+              ✅ {activeJob.sucessos} criados
             </span>
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
-              ⏭️ {lock.exists} existentes
+              ⏭️ {activeJob.processados - activeJob.sucessos - activeJob.erros - activeJob.ignorados} existentes
             </span>
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#DC2626' }}>
-              ❌ {lock.errors} erros
+              ❌ {activeJob.erros} erros
             </span>
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#D97706' }}>
-              ⚠️ {lock.skipped} ignorados
+              ⚠️ {activeJob.ignorados} ignorados
             </span>
+          </div>
+
+          {/* Last message */}
+          <p
+            style={{
+              fontFamily: 'monospace',
+              fontSize: '0.75rem',
+              color: '#64748B',
+              backgroundColor: '#FEF3C7',
+              padding: '0.5rem',
+              borderRadius: '0.375rem',
+              margin: 0,
+              marginBottom: '0.75rem',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {activeJob.mensagem}
+          </p>
+
+          {/* Botão Cancelar */}
+          <button
+            onClick={openCancelModal}
+            style={{
+              width: '100%',
+              fontFamily: 'var(--font-inter)',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              color: '#DC2626',
+              backgroundColor: '#FEE2E2',
+              border: '1px solid #FECACA',
+              borderRadius: '0.5rem',
+              padding: '0.5rem 1rem',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            Cancelar Importação
+          </button>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Cancelamento */}
+      {showCancelModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setShowCancelModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '400px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                margin: '0 0 0.5rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '1.125rem',
+                fontWeight: 600,
+                color: '#DC2626',
+              }}
+            >
+              Cancelar Importação?
+            </h3>
+            <p
+              style={{
+                margin: '0 0 1rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                color: '#64748B',
+              }}
+            >
+              Esta ação não pode ser desfeita. Os registros já processados serão mantidos.
+            </p>
+            <p
+              style={{
+                margin: '0 0 0.75rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                color: '#1E293B',
+                fontWeight: 500,
+              }}
+            >
+              Digite <strong style={{ color: '#DC2626' }}>CANCELAR</strong> para confirmar:
+            </p>
+            <input
+              type="text"
+              value={cancelConfirmText}
+              onChange={(e) => setCancelConfirmText(e.target.value.toUpperCase())}
+              placeholder="CANCELAR"
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                color: '#DC2626',
+                border: cancelConfirmText === 'CANCELAR' ? '2px solid #DC2626' : '1px solid #E2E8F0',
+                borderRadius: '0.5rem',
+                marginBottom: '1rem',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={() => setShowCancelModal(false)}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#64748B',
+                  backgroundColor: '#F1F5F9',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Voltar
+              </button>
+              <button
+                onClick={confirmCancelJob}
+                disabled={cancelConfirmText !== 'CANCELAR'}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: cancelConfirmText === 'CANCELAR' ? '#FFF' : '#9CA3AF',
+                  backgroundColor: cancelConfirmText === 'CANCELAR' ? '#DC2626' : '#E5E7EB',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: cancelConfirmText === 'CANCELAR' ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.2s',
+                }}
+              >
+                Confirmar
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Result Section - Completed/Error/Cancelled */}
-      {lock && !lock.isLocked && (
+      {(isCompleted || isError || isCancelled) && activeJob && (
         <div
           style={{
             padding: '1.5rem',
             borderRadius: '1rem',
-            backgroundColor: lock.status === 'completed' ? '#F0FDF4' : lock.status === 'error' ? '#FEF2F2' : '#F8FAFC',
-            border: `1px solid ${lock.status === 'completed' ? '#BBF7D0' : lock.status === 'error' ? '#FECACA' : '#E2E8F0'}`,
+            backgroundColor: isCompleted ? '#F0FDF4' : isCancelled ? '#FEF3C7' : '#FEF2F2',
+            border: `1px solid ${isCompleted ? '#BBF7D0' : isCancelled ? '#FDE68A' : '#FECACA'}`,
           }}
         >
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              {lock.status === 'completed' ? (
+              {isCompleted ? (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                   <polyline points="22 4 12 14.01 9 11.01" />
                 </svg>
-              ) : lock.status === 'error' ? (
+              ) : isCancelled ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="8" y1="12" x2="16" y2="12" />
+                </svg>
+              ) : (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
                   <circle cx="12" cy="12" r="10" />
                   <line x1="15" y1="9" x2="9" y2="15" />
                   <line x1="9" y1="9" x2="15" y2="15" />
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="8" y1="12" x2="16" y2="12" />
                 </svg>
               )}
               <span
@@ -663,16 +671,14 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                   fontFamily: 'var(--font-inter)',
                   fontSize: '0.875rem',
                   fontWeight: 600,
-                  color: lock.status === 'completed' ? '#16A34A' : lock.status === 'error' ? '#DC2626' : '#64748B',
+                  color: isCompleted ? '#16A34A' : isCancelled ? '#D97706' : '#DC2626',
                 }}
               >
-                {lock.status === 'completed' ? 'Importação concluída' :
-                 lock.status === 'error' ? 'Erro na importação' :
-                 'Importação cancelada'}
+                {isCompleted ? 'Importação concluída' : isCancelled ? 'Importação cancelada' : 'Erro na importação'}
               </span>
             </div>
             <button
-              onClick={forceReleaseLock}
+              onClick={clearJob}
               style={{
                 fontFamily: 'var(--font-inter)',
                 fontSize: '0.75rem',
@@ -696,20 +702,36 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
               marginBottom: '0.75rem',
             }}
           >
-            {lock.message}
+            {activeJob.mensagem}
           </p>
 
           <div className="flex gap-4 flex-wrap">
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#16A34A' }}>
-              ✅ {lock.created} criados
+              ✅ {activeJob.sucessos} criados
             </span>
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
-              ⏭️ {lock.exists} existentes
+              ⏭️ {activeJob.processados - activeJob.sucessos - activeJob.erros - activeJob.ignorados} existentes
             </span>
             <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#DC2626' }}>
-              ❌ {lock.errors} erros
+              ❌ {activeJob.erros} erros
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Error Alert */}
+      {error && (
+        <div
+          style={{
+            padding: '1rem',
+            borderRadius: '0.75rem',
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FECACA',
+          }}
+        >
+          <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', color: '#DC2626', margin: 0 }}>
+            {error}
+          </p>
         </div>
       )}
 
@@ -735,7 +757,6 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                 <button
                   key={platform.id}
                   onClick={() => setSelectedPlatform(platform)}
-                  disabled={lock?.isLocked}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -748,9 +769,8 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                     border: selectedPlatform.id === platform.id ? 'none' : '1px solid #E2E8F0',
                     borderRadius: '0.75rem',
                     padding: '0.5rem 1rem',
-                    cursor: lock?.isLocked ? 'not-allowed' : 'pointer',
+                    cursor: 'pointer',
                     transition: 'all 0.2s',
-                    opacity: lock?.isLocked ? 0.5 : 1,
                   }}
                 >
                   <div
@@ -782,16 +802,15 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            onClick={() => !lock?.isLocked && fileInputRef.current?.click()}
+            onClick={() => fileInputRef.current?.click()}
             style={{
               border: `2px dashed ${isDragging ? '#22D3EE' : file ? '#22C55E' : '#E2E8F0'}`,
               borderRadius: '1rem',
               padding: '2.5rem 2rem',
               textAlign: 'center',
-              cursor: lock?.isLocked ? 'not-allowed' : 'pointer',
+              cursor: 'pointer',
               backgroundColor: isDragging ? 'rgba(34, 211, 238, 0.05)' : file ? 'rgba(34, 197, 94, 0.05)' : '#F8FAFC',
               transition: 'all 0.2s ease',
-              opacity: lock?.isLocked ? 0.5 : 1,
             }}
           >
             <input
@@ -800,7 +819,6 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
               accept=".csv"
               onChange={handleFileSelect}
               style={{ display: 'none' }}
-              disabled={lock?.isLocked}
             />
 
             {file ? (
@@ -919,89 +937,28 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           {/* Import Button */}
           <button
             onClick={startImport}
-            disabled={!file || lock?.isLocked}
+            disabled={!file || isStarting}
             style={{
               width: '100%',
               fontFamily: 'var(--font-inter)',
               fontSize: '1rem',
               fontWeight: 600,
-              color: file && !lock?.isLocked ? '#FFFFFF' : '#94A3B8',
-              backgroundColor: file && !lock?.isLocked ? selectedPlatform.color : '#E2E8F0',
+              color: file && !isStarting ? '#FFFFFF' : '#94A3B8',
+              backgroundColor: file && !isStarting ? selectedPlatform.color : '#E2E8F0',
               border: 'none',
               borderRadius: '0.75rem',
               padding: '1rem',
-              cursor: file && !lock?.isLocked ? 'pointer' : 'not-allowed',
+              cursor: file && !isStarting ? 'pointer' : 'not-allowed',
               transition: 'all 0.2s',
             }}
           >
-            {lock?.isLocked ? 'Importação em andamento...' : 'Iniciar Importação'}
+            {isStarting ? 'Iniciando...' : 'Iniciar Importação'}
           </button>
         </>
       )}
 
-      {/* Logs Console */}
-      {showLogs && logs.length > 0 && (
-        <div
-          style={{
-            backgroundColor: '#1E293B',
-            borderRadius: '0.75rem',
-            padding: '1rem',
-            maxHeight: '300px',
-            overflowY: 'auto',
-          }}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <span
-              style={{
-                fontFamily: 'monospace',
-                fontSize: '0.625rem',
-                color: '#94A3B8',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}
-            >
-              Console
-            </span>
-            <button
-              onClick={() => setLogs([])}
-              style={{
-                fontFamily: 'var(--font-inter)',
-                fontSize: '0.625rem',
-                color: '#64748B',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              Limpar
-            </button>
-          </div>
-          {logs.map((log, i) => (
-            <div
-              key={i}
-              style={{
-                fontFamily: 'monospace',
-                fontSize: '0.75rem',
-                color: log.type === 'error' ? '#F87171' :
-                       log.type === 'success' ? '#4ADE80' :
-                       log.type === 'warning' ? '#FBBF24' :
-                       '#CBD5E1',
-                marginBottom: '0.25rem',
-                lineHeight: 1.4,
-              }}
-            >
-              <span style={{ color: '#64748B' }}>
-                {log.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </span>
-              {' '}{log.message}
-            </div>
-          ))}
-          <div ref={logsEndRef} />
-        </div>
-      )}
-
       {/* Error Log */}
-      {lock?.errorLog && lock.errorLog.length > 0 && (
+      {activeJob?.errosDetalhes && activeJob.errosDetalhes.length > 0 && (
         <div
           style={{
             backgroundColor: '#FEF2F2',
@@ -1020,10 +977,10 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
               marginBottom: '0.75rem',
             }}
           >
-            Erros ({lock.errorLog.length})
+            Últimos Erros ({activeJob.errosDetalhes.length})
           </h4>
           <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
-            {lock.errorLog.map((err, i) => (
+            {activeJob.errosDetalhes.map((err, i) => (
               <div
                 key={i}
                 style={{
@@ -1031,11 +988,11 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                   fontSize: '0.75rem',
                   paddingBottom: '0.5rem',
                   marginBottom: '0.5rem',
-                  borderBottom: i < lock.errorLog.length - 1 ? '1px solid #FECACA' : 'none',
+                  borderBottom: i < activeJob.errosDetalhes.length - 1 ? '1px solid #FECACA' : 'none',
                 }}
               >
                 <span style={{ color: '#DC2626', fontWeight: 500 }}>{err.email}</span>
-                <span style={{ color: '#B91C1C', marginLeft: '0.5rem' }}>{err.error}</span>
+                <span style={{ color: '#B91C1C', marginLeft: '0.5rem' }}>{err.error.substring(0, 100)}</span>
               </div>
             ))}
           </div>

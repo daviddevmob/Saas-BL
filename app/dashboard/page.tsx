@@ -12,6 +12,7 @@ import Button from '@/components/Button';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import CsvUploadUnified from '@/components/CsvUploadUnified';
 import EtiquetasUpload from '@/components/EtiquetasUpload';
+import CarrinhosAbandonados from '@/components/CarrinhosAbandonados';
 
 interface MenuItem {
   id: string;
@@ -431,6 +432,19 @@ export default function DashboardPage() {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
           <line x1="7" y1="7" x2="7.01" y2="7" />
+        </svg>
+      ),
+    },
+    {
+      id: 'carrinhos',
+      label: 'Carrinhos Abandonados',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="9" cy="21" r="1" />
+          <circle cx="20" cy="21" r="1" />
+          <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+          <line x1="12" y1="9" x2="12" y2="15" />
+          <line x1="9" y1="12" x2="15" y2="12" />
         </svg>
       ),
     },
@@ -1493,8 +1507,15 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Carrinhos Abandonados Page */}
+        {activeMenu === 'carrinhos' && (
+          <div className="flex-1 overflow-auto px-4 md:px-[110px] pt-6 pb-8" style={{ backgroundColor: '#F8FAFC' }}>
+            <CarrinhosAbandonados />
+          </div>
+        )}
+
         {/* Placeholder for other menu items */}
-        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && activeMenu !== 'etiquetas' && (
+        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && activeMenu !== 'etiquetas' && activeMenu !== 'carrinhos' && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="text-center">
               <h2 className="text-2xl font-semibold text-slate-900 mb-2">

@@ -1,0 +1,432 @@
+{
+  "name": "Etiquetas WhatsApp - Evolution API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hotmart-webhook",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "6583fbce-ca41-4e28-9134-5545d4f83ea5",
+      "name": "Hotmart Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, -200],
+      "webhookId": "hotmart-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook Hotmart → Datacrazy\n// Hottok: SSF4gejPRrOXZFefyrZzy2wm2OJwMbf4fc7e40-58f3-4845-a233-d7293b87b299\n\nconst HOTTOK = 'SSF4gejPRrOXZFefyrZzy2wm2OJwMbf4fc7e40-58f3-4845-a233-d7293b87b299';\nconst DATACRAZY_TOKEN = 'dc_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5MzcyODRjYTc3MWNkZmY4MGJjMjc2ZiIsInRlbmFudElkIjoiNjdmN2E5ODAtODk0YS00Nzk5LThjMDMtZTYyNGY5ZWRhNTY3IiwibmFtZSI6Ik44biAtIGR2IiwiaWF0IjoxNzY1MjIyNDc2LCJleHAiOjE5MjQ5MTYzOTl9.eii1aUDplkPh1Y2Rt5W0EhTqaQ4uvr2ClV0_OBOSvDU';\nconst API_URL = 'https://api.g1.datacrazy.io/api/v1';\n\n// Stage para compras aprovadas (mesmo do import CSV Hotmart)\nconst STAGE_APPROVED = '0c2bf45f-1c4b-4730-b02c-286b7c018f29';\n\nconst input = $input.first().json;\nconst body = input.body || input;\n\n// 1. Validar Hottok\nconst receivedHottok = body.hottok || input.headers?.['x-hotmart-hottok'];\nif (receivedHottok !== HOTTOK) {\n  return [{ json: { status: 'error', reason: 'Invalid hottok', received: receivedHottok } }];\n}\n\n// 2. Extrair dados do webhook\nconst event = body.event || body.status;\nconst data = body.data || body;\n\n// Só processar compras aprovadas/completas\nif (event !== 'PURCHASE_COMPLETE' && event !== 'PURCHASE_APPROVED') {\n  return [{ json: { status: 'ignored', reason: 'Not a purchase event', event } }];\n}\n\nconst email = data.buyer?.email;\nconst name = data.buyer?.name;\nconst phone = data.buyer?.phone;\nconst productName = data.product?.name;\nconst transactionId = data.purchase?.transaction || data.transaction;\nconst saleValue = data.purchase?.price?.value || data.purchase?.original_offer_price?.value || 0;\n\nif (!email) {\n  return [{ json: { status: 'error', reason: 'No email in payload', event } }];\n}\n\ntry {\n  // 3. Buscar/Criar Lead\n  const leadData = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${API_URL}/leads?search=${encodeURIComponent(email)}`,\n    headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN}` },\n    json: true\n  });\n  \n  let leadId;\n  let leadTags = [];\n  \n  if (leadData.count === 0) {\n    const newLead = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `${API_URL}/leads`,\n      headers: { \n        'Authorization': `Bearer ${DATACRAZY_TOKEN}`,\n        'Content-Type': 'application/json'\n      },\n      body: { \n        name, \n        email, \n        phone: phone || undefined,\n        source: 'Hotmart Webhook' \n      },\n      json: true\n    });\n    leadId = newLead.id;\n  } else {\n    leadId = leadData.data[0].id;\n    leadTags = leadData.data[0].tags || [];\n  }\n  \n  // 4. Buscar/Adicionar Tag do Produto\n  if (productName) {\n    const tagData = await this.helpers.httpRequest({\n      method: 'GET',\n      url: `${API_URL}/tags?search=${encodeURIComponent(productName)}`,\n      headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN}` },\n      json: true\n    });\n    \n    if (tagData.data && tagData.data[0]) {\n      const tagId = tagData.data[0].id;\n      const hasTag = leadTags.some(t => t.id === tagId);\n      \n      if (!hasTag) {\n        const allTagIds = [...leadTags.map(t => ({ id: t.id })), { id: tagId }];\n        await this.helpers.httpRequest({\n          method: 'PATCH',\n          url: `${API_URL}/leads/${leadId}`,\n          headers: { \n            'Authorization': `Bearer ${DATACRAZY_TOKEN}`,\n            'Content-Type': 'application/json'\n          },\n          body: { tags: allTagIds },\n          json: true\n        });\n      }\n    }\n  }\n  \n  // 5. Buscar businesses do lead para verificar duplicidade\n  const leadBizData = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${API_URL}/leads/${leadId}/businesses`,\n    headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN}` },\n    json: true\n  });\n  \n  const existingBiz = leadBizData?.data?.find(b => b.externalId === transactionId);\n  \n  if (!existingBiz) {\n    // Criar novo Business\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: `${API_URL}/businesses`,\n      headers: { \n        'Authorization': `Bearer ${DATACRAZY_TOKEN}`,\n        'Content-Type': 'application/json'\n      },\n      body: {\n        leadId,\n        stageId: STAGE_APPROVED,\n        externalId: transactionId,\n        total: saleValue\n      },\n      json: true\n    });\n    return [{ json: { status: 'created', event, email, name, transactionId, value: saleValue } }];\n  } else {\n    return [{ json: { status: 'exists', event, email, name, transactionId, value: saleValue } }];\n  }\n  \n} catch (e) {\n  return [{ json: { status: 'error', event, email, error: e.message } }];\n}"
+      },
+      "id": "e11b14d0-a662-43bb-800d-c8fbe09369bf",
+      "name": "Process Hotmart Webhook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, -200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "etiquetas",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "207a3dae-c0a2-4805-b144-42cc2ee006ed",
+      "name": "Webhook Etiquetas",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "etiquetas-webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Webhook recebido\" }",
+        "options": {}
+      },
+      "id": "c641d775-6490-4c80-b8fd-69b45679b70d",
+      "name": "Responder Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "id": "6eb50838-84d4-4c95-aef5-b63c41fa94ea",
+      "name": "Delay Admin Texto 1s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [500, 300],
+      "webhookId": "delay-admin-texto"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendText/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('Webhook Etiquetas').item.json.body.adminPhone }}\",\n  \"text\": \"📦 *Etiquetas Geradas*\\n\\nTotal: {{ $('Webhook Etiquetas').item.json.body.total }} etiqueta(s)\\n\\n{{ $('Webhook Etiquetas').item.json.body.resumo.mensagem }}\"\n}",
+        "options": {}
+      },
+      "id": "736c422d-dc7f-450e-9002-799b2fed71fa",
+      "name": "Enviar Texto Admin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "723440df-c03e-4db4-8d98-0cdd1067ca6d",
+      "name": "Delay Admin PDF 2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [500, 450],
+      "webhookId": "delay-admin-pdf"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validar se o PDF existe antes de enviar\nconst codigos = $('Webhook Etiquetas').item.json.body.resumo.codigos;\nconst codigosStr = codigos.join(',');\nconst pdfUrl = `https://vipp.visualset.com.br/vipp/remoto/ImpressaoRemota.php?Usr=onbiws&Pwd=112233&Filtro=1&Saida=20&Lista=${codigosStr}`;\n\nlet debug = {\n  codigos: codigos,\n  codigosStr: codigosStr,\n  pdfUrl: pdfUrl,\n  vippResponse: null,\n  vippStatus: null,\n  vippError: null\n};\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'HEAD',\n    url: pdfUrl,\n    resolveWithFullResponse: true,\n    simple: false\n  });\n  \n  debug.vippStatus = response.statusCode;\n  debug.vippResponse = response.headers;\n  \n  // Se retornar 200 e for PDF, continua\n  if (response.statusCode === 200) {\n    return [{\n      json: {\n        pdfValido: true,\n        pdfUrl: pdfUrl,\n        adminPhone: $('Webhook Etiquetas').item.json.body.adminPhone,\n        total: $('Webhook Etiquetas').item.json.body.total,\n        debug: debug\n      }\n    }];\n  }\n} catch (e) {\n  debug.vippError = e.message;\n}\n\n// PDF não existe ou erro\nreturn [{\n  json: {\n    pdfValido: false,\n    pdfUrl: pdfUrl,\n    adminPhone: $('Webhook Etiquetas').item.json.body.adminPhone,\n    total: $('Webhook Etiquetas').item.json.body.total,\n    debug: debug\n  }\n}];"
+      },
+      "id": "validar-pdf-admin",
+      "name": "Validar PDF Admin",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 450]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.pdfValido }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-pdf-admin-valido",
+      "name": "PDF Admin Valido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 450]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendMedia/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.adminPhone }}\",\n  \"mediatype\": \"document\",\n  \"media\": \"{{ $json.pdfUrl }}\",\n  \"caption\": \"📄 Etiquetas ({{ $json.total }})\",\n  \"fileName\": \"etiquetas.pdf\"\n}",
+        "options": {}
+      },
+      "id": "da7a3cad-0957-42dc-a762-a61dcbc8c619",
+      "name": "Enviar PDF Admin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.etiquetas",
+        "options": {}
+      },
+      "id": "262b0dca-e674-453d-b4cc-25b0c91cdad4",
+      "name": "Split Etiquetas",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [500, 650]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "id": "delay-cliente-texto-1s",
+      "name": "Delay Cliente Texto 1s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [750, 600],
+      "webhookId": "delay-cliente-texto"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendText/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $('Split Etiquetas').item.json.clienteTelefone }}\",\n  \"text\": \"Olá {{ $('Split Etiquetas').item.json.clienteNome }}! 📦\\n\\nSua etiqueta de envio foi gerada!\\n\\n🏷️ *Código de Rastreio:*\\n{{ $('Split Etiquetas').item.json.codigo }}\\n\\nVocê pode acompanhar seu pedido pelo site dos Correios.\\n\\nObrigado pela compra! 🙏\"\n}",
+        "options": {}
+      },
+      "id": "d6afd680-bffe-43b5-ae40-769d300249ff",
+      "name": "Enviar Texto Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 600]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "delay-cliente-pdf-2s",
+      "name": "Delay Cliente PDF 2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [750, 800],
+      "webhookId": "delay-cliente-pdf"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validar se o PDF do cliente existe antes de enviar\nconst etiqueta = $('Split Etiquetas').item.json;\nconst pdfUrl = etiqueta.pdfUrl;\n\nlet debug = {\n  etiqueta: etiqueta,\n  pdfUrl: pdfUrl,\n  vippResponse: null,\n  vippStatus: null,\n  vippError: null\n};\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'HEAD',\n    url: pdfUrl,\n    resolveWithFullResponse: true,\n    simple: false\n  });\n  \n  debug.vippStatus = response.statusCode;\n  debug.vippResponse = response.headers;\n  \n  // Se retornar 200, continua\n  if (response.statusCode === 200) {\n    return [{\n      json: {\n        pdfValido: true,\n        pdfUrl: pdfUrl,\n        clienteTelefone: etiqueta.clienteTelefone,\n        clienteNome: etiqueta.clienteNome,\n        codigo: etiqueta.codigo,\n        debug: debug\n      }\n    }];\n  }\n} catch (e) {\n  debug.vippError = e.message;\n}\n\n// PDF não existe ou erro\nreturn [{\n  json: {\n    pdfValido: false,\n    pdfUrl: pdfUrl,\n    clienteTelefone: etiqueta.clienteTelefone,\n    clienteNome: etiqueta.clienteNome,\n    codigo: etiqueta.codigo,\n    debug: debug\n  }\n}];"
+      },
+      "id": "validar-pdf-cliente",
+      "name": "Validar PDF Cliente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 800]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.pdfValido }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-pdf-cliente-valido",
+      "name": "PDF Cliente Valido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 800]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://wpp.hubfy.brandinglab.com.br/message/sendMedia/whatsapp-david",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "F3C6EFCE16CF-48FF-9AA5-72770AB9A154"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.clienteTelefone }}\",\n  \"mediatype\": \"document\",\n  \"media\": \"{{ $json.pdfUrl }}\",\n  \"caption\": \"📄 Etiqueta - {{ $json.clienteNome }}\\n🏷️ {{ $json.codigo }}\",\n  \"fileName\": \"etiqueta-{{ $json.codigo }}.pdf\"\n}",
+        "options": {}
+      },
+      "id": "send-pdf-cliente",
+      "name": "Enviar PDF Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 750]
+    }
+  ],
+  "connections": {
+    "Hotmart Webhook": {
+      "main": [
+        [
+          {
+            "node": "Process Hotmart Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Etiquetas": {
+      "main": [
+        [
+          {
+            "node": "Responder Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Delay Admin Texto 1s",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Delay Admin PDF 2s",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split Etiquetas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay Admin Texto 1s": {
+      "main": [
+        [
+          {
+            "node": "Enviar Texto Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay Admin PDF 2s": {
+      "main": [
+        [
+          {
+            "node": "Validar PDF Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar PDF Admin": {
+      "main": [
+        [
+          {
+            "node": "PDF Admin Valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Admin Valido?": {
+      "main": [
+        [
+          {
+            "node": "Enviar PDF Admin",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split Etiquetas": {
+      "main": [
+        [
+          {
+            "node": "Delay Cliente Texto 1s",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Delay Cliente PDF 2s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay Cliente Texto 1s": {
+      "main": [
+        [
+          {
+            "node": "Enviar Texto Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay Cliente PDF 2s": {
+      "main": [
+        [
+          {
+            "node": "Validar PDF Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar PDF Cliente": {
+      "main": [
+        [
+          {
+            "node": "PDF Cliente Valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Cliente Valido?": {
+      "main": [
+        [
+          {
+            "node": "Enviar PDF Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "updated-v4",
+  "meta": {
+    "instanceId": "ef0a37e3294b44fdae613ebc9905bdfafb570470090549bc67dd66437b9e4cca"
+  },
+  "id": "nGPDyZANd5HlUoeD",
+  "tags": []
+}
