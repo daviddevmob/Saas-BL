@@ -465,6 +465,7 @@ export default function EtiquetasUpload() {
   const [showGenerationConfirmModal, setShowGenerationConfirmModal] = useState(false); // Modal de confirmação geração
   const [confirmEtiquetasText, setConfirmEtiquetasText] = useState(''); // Texto de confirmação "etiquetas" (produção)
   const [confirmEnviarText, setConfirmEnviarText] = useState(''); // Texto de confirmação "enviar" (cliente)
+  const [showNewUploadConfirm, setShowNewUploadConfirm] = useState(false); // Modal de confirmação novo upload
 
   // Carregar templates do Firebase ao montar
   useEffect(() => {
@@ -2426,21 +2427,11 @@ export default function EtiquetasUpload() {
   // Estado com vendas carregadas - Tabela
   return (
     <div className="w-full max-w-6xl mx-auto">
-      {/* Header - Título + Novo Upload */}
+      {/* Header - Novo Upload + Config */}
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h2
-            style={{
-              fontFamily: 'var(--font-public-sans)',
-              fontWeight: 600,
-              fontSize: '1.25rem',
-              color: '#314158',
-            }}
-          >
-            Etiquetas
-          </h2>
           <button
-            onClick={resetUpload}
+            onClick={() => setShowNewUploadConfirm(true)}
             disabled={isGenerating}
             className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 transition disabled:opacity-50"
             style={{
@@ -4524,6 +4515,98 @@ export default function EtiquetasUpload() {
                 }}
               >
                 Confirmar Geração
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação - Novo Upload */}
+      {showNewUploadConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setShowNewUploadConfirm(false)}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '400px',
+              width: '90%',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                fontFamily: 'var(--font-public-sans)',
+                fontWeight: 600,
+                fontSize: '1.125rem',
+                color: '#1E293B',
+                margin: '0 0 0.75rem 0',
+              }}
+            >
+              Novo Upload
+            </h3>
+            <p
+              style={{
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                color: '#64748B',
+                margin: '0 0 1.5rem 0',
+              }}
+            >
+              Deseja importar um novo CSV? Os dados atuais serão substituídos.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={() => setShowNewUploadConfirm(false)}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontWeight: 500,
+                  fontSize: '0.875rem',
+                  color: '#64748B',
+                  backgroundColor: '#F1F5F9',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  setShowNewUploadConfirm(false);
+                  resetUpload();
+                }}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontWeight: 500,
+                  fontSize: '0.875rem',
+                  color: '#FFF',
+                  backgroundColor: '#F97316',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Confirmar
               </button>
             </div>
           </div>
