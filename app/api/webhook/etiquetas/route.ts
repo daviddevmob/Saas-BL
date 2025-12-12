@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 
 // URL do webhook N8N - configure no .env
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || '';
-const ADMIN_PHONE = process.env.N8N_WHATSAPP_ADMIN || '';
-const CLIENTE_PHONE_OVERRIDE = process.env.N8N_WHATSAPP_CLIENTE || ''; // Se preenchido, substitui o número do cliente
-const ENVIAR_WHATSAPP_CLIENTE = process.env.WHATSAPP_ENVIAR_CLIENTE === 'true'; // Se false, não envia WhatsApp para clientes
 
 // Configuração ViPP para gerar URL do PDF
 const VIPP_PRINT_CONFIG = {
@@ -35,9 +32,16 @@ interface EtiquetaData {
   produtos?: string[];
 }
 
+interface WebhookConfig {
+  adminPhone: string; // Telefone do admin (obrigatório)
+  clientPhoneOverride?: string; // Se preenchido, substitui o número do cliente
+  sendClientNotification: boolean; // Se true, envia WhatsApp para clientes
+}
+
 interface WebhookRequest {
   etiquetas: EtiquetaData[]; // Etiquetas novas (cliente recebe WhatsApp)
   etiquetasAdmin?: EtiquetaData[]; // Todas etiquetas (admin recebe WhatsApp)
+  config: WebhookConfig; // Configurações vindas do Firebase
 }
 
 // Formata e valida número de telefone brasileiro
@@ -92,11 +96,19 @@ function gerarUrlPdf(codigos: string | string[]): string {
 export async function POST(request: NextRequest) {
   try {
     const body: WebhookRequest = await request.json();
-    const { etiquetas, etiquetasAdmin } = body;
+    const { etiquetas, etiquetasAdmin, config } = body;
 
     console.log('\n========== WEBHOOK ETIQUETAS - RECEBIDO ==========');
     console.log('Body recebido:', JSON.stringify(body, null, 2));
     console.log('==================================================\n');
+
+    // Validar config
+    if (!config || !config.adminPhone) {
+      return NextResponse.json(
+        { error: 'Configuração com adminPhone é obrigatória' },
+        { status: 400 }
+      );
+    }
 
     // Usar etiquetasAdmin se fornecido, senão usar etiquetas (compatibilidade)
     const todasEtiquetas = etiquetasAdmin && etiquetasAdmin.length > 0 ? etiquetasAdmin : etiquetas;
@@ -109,18 +121,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Formatar número do admin
-    const adminPhoneFormatted = formatarTelefone(ADMIN_PHONE);
+    // Formatar número do admin (vindo do config/Firebase)
+    const adminPhoneFormatted = formatarTelefone(config.adminPhone);
     if (!adminPhoneFormatted) {
-      console.error('N8N_WHATSAPP_ADMIN não configurado ou inválido:', ADMIN_PHONE);
+      console.error('adminPhone inválido:', config.adminPhone);
       return NextResponse.json(
-        { error: 'Número do admin não configurado' },
-        { status: 500 }
+        { error: 'Número do admin inválido' },
+        { status: 400 }
       );
     }
 
-    // Formatar número de override do cliente (se existir)
-    const clientePhoneOverride = CLIENTE_PHONE_OVERRIDE ? formatarTelefone(CLIENTE_PHONE_OVERRIDE) : null;
+    // Formatar número de override do cliente (se existir no config)
+    const clientePhoneOverride = config.clientPhoneOverride ? formatarTelefone(config.clientPhoneOverride) : null;
+
+    // Flag para enviar WhatsApp ao cliente (vindo do config/Firebase)
+    const enviarWhatsappCliente = config.sendClientNotification;
 
     // Processar etiquetas NOVAS para envio ao cliente (WhatsApp)
     const etiquetasNovasProcessadas = etiquetasNovas.map(e => {
@@ -225,14 +240,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Preparar dados para o N8N
-    // - etiquetas: NOVAS com telefone (cliente recebe WhatsApp individual) - só se WHATSAPP_ENVIAR_CLIENTE=true
+    // - etiquetas: NOVAS com telefone (cliente recebe WhatsApp individual) - só se sendClientNotification=true
     // - todasEtiquetas: TODAS (admin recebe resumo + PDF consolidado)
 
-    // Se WHATSAPP_ENVIAR_CLIENTE=false, envia array vazio para não disparar WhatsApp aos clientes
-    const etiquetasParaCliente = ENVIAR_WHATSAPP_CLIENTE ? etiquetasNovasComTelefone : [];
+    // Se sendClientNotification=false, envia array vazio para não disparar WhatsApp aos clientes
+    const etiquetasParaCliente = enviarWhatsappCliente ? etiquetasNovasComTelefone : [];
 
-    if (!ENVIAR_WHATSAPP_CLIENTE && etiquetasNovasComTelefone.length > 0) {
-      console.log(`⚠️ WHATSAPP_ENVIAR_CLIENTE=false - ${etiquetasNovasComTelefone.length} cliente(s) NÃO receberão WhatsApp`);
+    if (!enviarWhatsappCliente && etiquetasNovasComTelefone.length > 0) {
+      console.log(`⚠️ sendClientNotification=false - ${etiquetasNovasComTelefone.length} cliente(s) NÃO receberão WhatsApp`);
     }
 
     const webhookPayload = {
@@ -255,7 +270,7 @@ export async function POST(request: NextRequest) {
         codigos: todasEtiquetas.map(e => e.codigo),
         codigosNovos: etiquetasNovas.map(e => e.codigo),
         semTelefone: etiquetasNovasSemTelefone.length,
-        enviarClienteDesabilitado: !ENVIAR_WHATSAPP_CLIENTE,
+        enviarClienteDesabilitado: !enviarWhatsappCliente,
       },
     };
 

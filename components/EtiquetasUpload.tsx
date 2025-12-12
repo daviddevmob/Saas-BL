@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import Image from 'next/image';
 import Papa from 'papaparse';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 
 // Serviços ECT disponíveis (Correios) - códigos do contrato
 const SERVICOS_ECT = [
@@ -372,6 +372,47 @@ async function saveLabel(
   }
 }
 
+// Interface para configurações de etiquetas
+interface EtiquetasSettings {
+  adminPhone: string;
+  clientPhoneOverride: string;
+  sendToN8n: boolean;
+  sendClientNotification: boolean;
+  useTestCredentials: boolean;
+  updatedAt?: Timestamp;
+}
+
+// ID fixo do documento de configurações
+const SETTINGS_DOC_ID = 'etiquetas_config';
+
+// Carregar configurações do Firebase
+async function loadEtiquetasSettings(): Promise<EtiquetasSettings | null> {
+  try {
+    const docRef = doc(db, 'settings', SETTINGS_DOC_ID);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as EtiquetasSettings;
+    }
+    return null;
+  } catch (err) {
+    console.error('Erro ao carregar configurações:', err);
+    return null;
+  }
+}
+
+// Salvar configurações no Firebase
+async function saveEtiquetasSettings(settings: Omit<EtiquetasSettings, 'updatedAt'>): Promise<void> {
+  try {
+    const docRef = doc(db, 'settings', SETTINGS_DOC_ID);
+    await setDoc(docRef, {
+      ...settings,
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('Erro ao salvar configurações:', err);
+  }
+}
+
 export default function EtiquetasUpload() {
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -414,6 +455,17 @@ export default function EtiquetasUpload() {
   const [editTemplateLogo, setEditTemplateLogo] = useState<string>('');
   const [showSaveAndProcessModal, setShowSaveAndProcessModal] = useState(false);
 
+  // Estados para configurações de envio
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [sendToN8n, setSendToN8n] = useState(true); // Enviar dados para n8n/webhook
+  const [sendClientNotification, setSendClientNotification] = useState(false); // Notificar cliente via WhatsApp
+  const [useTestCredentials, setUseTestCredentials] = useState(false); // Usar credenciais de teste VIPP
+  const [adminPhone, setAdminPhone] = useState('5585987080090'); // Telefone admin para notificações
+  const [clientPhoneOverride, setClientPhoneOverride] = useState(''); // Telefone para testar notificação cliente
+  const [showGenerationConfirmModal, setShowGenerationConfirmModal] = useState(false); // Modal de confirmação geração
+  const [confirmEtiquetasText, setConfirmEtiquetasText] = useState(''); // Texto de confirmação "etiquetas" (produção)
+  const [confirmEnviarText, setConfirmEnviarText] = useState(''); // Texto de confirmação "enviar" (cliente)
+
   // Carregar templates do Firebase ao montar
   useEffect(() => {
     const loadTemplates = async () => {
@@ -424,6 +476,49 @@ export default function EtiquetasUpload() {
     };
     loadTemplates();
   }, []);
+
+  // Carregar configurações do Firebase ao montar
+  useEffect(() => {
+    const loadSettings = async () => {
+      const settings = await loadEtiquetasSettings();
+      if (settings) {
+        setAdminPhone(settings.adminPhone || '5585987080090');
+        setClientPhoneOverride(settings.clientPhoneOverride || '');
+        setSendToN8n(settings.sendToN8n !== false); // default true
+        setSendClientNotification(settings.sendClientNotification || false);
+        setUseTestCredentials(settings.useTestCredentials || false);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  // Validar telefone brasileiro (13 dígitos, começa com 55)
+  const isValidPhone = (phone: string): boolean => {
+    const cleaned = phone.replace(/\D/g, '');
+    return cleaned.length === 13 && cleaned.startsWith('55');
+  };
+
+  // Salvar configurações no Firebase quando mudarem
+  const handleSaveSettings = async () => {
+    // Validar telefone admin antes de salvar
+    if (!isValidPhone(adminPhone)) {
+      alert('Telefone do admin inválido! Deve ter 13 dígitos e começar com 55.\nExemplo: 5585987080090');
+      return;
+    }
+    await saveEtiquetasSettings({
+      adminPhone,
+      clientPhoneOverride,
+      sendToN8n,
+      sendClientNotification,
+      useTestCredentials,
+    });
+  };
+
+  // Verificar se precisa confirmar produção (não é teste)
+  const needsProductionConfirm = !useTestCredentials;
+
+  // Verificar se precisa confirmar envio ao cliente (notificação ativa + sem telefone de teste)
+  const needsClientConfirm = sendClientNotification && sendToN8n && !clientPhoneOverride;
 
   // Carregar mapeamento salvo do localStorage (fallback)
   useEffect(() => {
@@ -1147,47 +1242,56 @@ export default function EtiquetasUpload() {
 
     if (selectedLabels.length === 0) return;
 
-    // 1. WEBHOOK - Disparar para admin receber notificação (mesmo só imprimindo)
-    try {
-      const etiquetasParaWebhook = selectedSales.map(sale => ({
-        codigo: sale.etiqueta || '',
-        transactionId: sale.transaction,
-        produto: sale.productName,
-        destinatario: {
-          nome: sale.name,
-          telefone: sale.phone,
-          email: sale.email,
-          logradouro: sale.address,
-          numero: sale.number || 'S/N',
-          complemento: sale.complement || '',
-          bairro: sale.neighborhood,
-          cidade: sale.city,
-          uf: sale.state,
-          cep: sale.zip?.replace(/\D/g, '') || '',
-        },
-      }));
+    // 1. WEBHOOK - Notificar admin (somente se N8N ativado)
+    // etiquetas: [] = nenhuma nova, cliente NÃO recebe
+    // etiquetasAdmin: todas selecionadas, admin recebe
+    if (sendToN8n) {
+      try {
+        const etiquetasParaWebhook = selectedSales.map(sale => ({
+          codigo: sale.etiqueta || '',
+          transactionId: sale.transaction,
+          produto: sale.productName,
+          destinatario: {
+            nome: sale.name,
+            telefone: sale.phone,
+            email: sale.email,
+            logradouro: sale.address,
+            numero: sale.number || 'S/N',
+            complemento: sale.complement || '',
+            bairro: sale.neighborhood,
+            cidade: sale.city,
+            uf: sale.state,
+            cep: sale.zip?.replace(/\D/g, '') || '',
+          },
+        }));
 
-      const webhookPayload = {
-        etiquetas: [], // Nenhuma nova - cliente não recebe
-        etiquetasAdmin: etiquetasParaWebhook, // Admin recebe todas as selecionadas
-      };
+        const webhookPayload = {
+          etiquetas: [], // VAZIO = cliente NÃO recebe (já foram geradas antes)
+          etiquetasAdmin: etiquetasParaWebhook, // Admin recebe
+          config: {
+            adminPhone: adminPhone,
+            clientPhoneOverride: clientPhoneOverride || undefined,
+            sendClientNotification: false, // Já geradas não notificam cliente
+          },
+        };
 
-      console.log('========== WEBHOOK IMPRIMIR (só já geradas) ==========');
-      console.log('Enviando para /api/webhook/etiquetas:');
-      console.log('- Etiquetas para admin:', etiquetasParaWebhook.length);
-      console.log(JSON.stringify(webhookPayload, null, 2));
-      console.log('======================================================');
+        console.log('========== WEBHOOK IMPRIMIR ==========');
+        console.log('- N8N ativado: true');
+        console.log('- Etiquetas já geradas (admin recebe):', etiquetasParaWebhook.length);
+        console.log('- Cliente NÃO recebe (etiquetas já foram geradas antes)');
+        console.log('======================================');
 
-      await fetch('/api/webhook/etiquetas', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(webhookPayload),
-      });
-    } catch (webhookErr) {
-      console.error('Erro ao disparar webhook:', webhookErr);
+        await fetch('/api/webhook/etiquetas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(webhookPayload),
+        });
+      } catch (webhookErr) {
+        console.error('Erro ao disparar webhook:', webhookErr);
+      }
     }
 
-    // 2. IMPRIMIR - Baixar PDF
+    // 2. IMPRIMIR - Baixar PDF localmente (sempre funciona)
     try {
       const response = await fetch('/api/vipp/imprimir', {
         method: 'POST',
@@ -1393,19 +1497,33 @@ export default function EtiquetasUpload() {
       s.etiquetaStatus === 'generated' ? { ...s, selected: false } : s
     ));
 
-    // 1. WEBHOOK - Disparar imediatamente após gerar
+    // 1. WEBHOOK - Disparar somente se N8N estiver ativado
     // Admin recebe TODAS, Cliente recebe apenas as NOVAS
     const todasParaAdmin = [...etiquetasNovas, ...etiquetasJaGeradas];
 
-    if (todasParaAdmin.length > 0) {
+    if (sendToN8n && todasParaAdmin.length > 0) {
       try {
+        // Cliente real só recebe se: VIPP teste OFF + notificação ON + cliente teste VAZIO
+        const enviarParaClienteReal = !useTestCredentials && sendClientNotification && !clientPhoneOverride;
+
         const webhookPayload = {
           etiquetas: etiquetasNovas, // Cliente recebe só as novas
           etiquetasAdmin: todasParaAdmin, // Admin recebe todas
+          config: {
+            adminPhone: adminPhone,
+            clientPhoneOverride: clientPhoneOverride || undefined,
+            // Só envia para cliente real se todas as condições forem atendidas
+            sendClientNotification: enviarParaClienteReal || (sendClientNotification && !!clientPhoneOverride),
+          },
         };
 
         console.log('========== WEBHOOK ETIQUETAS ==========');
         console.log('Enviando para /api/webhook/etiquetas:');
+        console.log('- N8N ativado:', sendToN8n);
+        console.log('- VIPP teste:', useTestCredentials);
+        console.log('- Notificação cliente:', sendClientNotification);
+        console.log('- Cliente teste:', clientPhoneOverride || '(vazio - cliente real)');
+        console.log('- Enviar para cliente real:', enviarParaClienteReal);
         console.log('- Etiquetas novas (cliente vai receber):', etiquetasNovas.length);
         console.log('- Etiquetas total (admin vai receber):', todasParaAdmin.length);
         console.log(JSON.stringify(webhookPayload, null, 2));
@@ -1422,6 +1540,10 @@ export default function EtiquetasUpload() {
       } catch (webhookErr) {
         console.error('Erro ao disparar webhook N8N:', webhookErr);
       }
+    } else if (!sendToN8n) {
+      console.log('========== WEBHOOK DESATIVADO ==========');
+      console.log('N8N está desativado, webhook não será disparado');
+      console.log('========================================');
     }
 
     // 2. IMPRIMIR - Baixar PDF local após webhook
@@ -1483,8 +1605,35 @@ export default function EtiquetasUpload() {
   // Confirmar geração após modal
   const confirmGeneration = () => {
     setShowServiceConfirmModal(false);
-    executeGeneration(pendingGeneration);
-    setPendingGeneration([]);
+
+    // Se precisa confirmar produção OU confirmar envio ao cliente, mostra modal
+    if (needsProductionConfirm || needsClientConfirm) {
+      setConfirmEtiquetasText('');
+      setConfirmEnviarText('');
+      setShowGenerationConfirmModal(true);
+      // pendingGeneration já está setado, será usado quando confirmar
+    } else {
+      executeGeneration(pendingGeneration);
+      setPendingGeneration([]);
+    }
+  };
+
+  // Verificar se confirmação é válida
+  const isConfirmationValid = () => {
+    const etiquetasOk = !needsProductionConfirm || confirmEtiquetasText.toLowerCase() === 'etiquetas';
+    const enviarOk = !needsClientConfirm || confirmEnviarText.toLowerCase() === 'enviar';
+    return etiquetasOk && enviarOk;
+  };
+
+  // Executar após confirmação do modal unificado
+  const handleConfirmGeneration = () => {
+    if (isConfirmationValid()) {
+      setShowGenerationConfirmModal(false);
+      setConfirmEtiquetasText('');
+      setConfirmEnviarText('');
+      executeGeneration(pendingGeneration);
+      setPendingGeneration([]);
+    }
   };
 
   const resetUpload = () => {
@@ -2277,38 +2426,74 @@ export default function EtiquetasUpload() {
   // Estado com vendas carregadas - Tabela
   return (
     <div className="w-full max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
+      {/* Header - Título + Novo Upload */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
           <h2
             style={{
               fontFamily: 'var(--font-public-sans)',
               fontWeight: 600,
               fontSize: '1.25rem',
               color: '#314158',
-              marginBottom: '0.25rem',
             }}
           >
-            Vendas de Produtos Físicos
+            Etiquetas
           </h2>
-          <p
+          <button
+            onClick={resetUpload}
+            disabled={isGenerating}
+            className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 transition disabled:opacity-50"
             style={{
               fontFamily: 'var(--font-inter)',
-              fontSize: '0.875rem',
+              fontWeight: 500,
+              fontSize: '0.75rem',
               color: '#64748B',
             }}
           >
-            {fileName} • {physicalSales.length} vendas físicas de {totalRows} total
-            {alreadyGeneratedCount > 0 && (
-              <span className="ml-2 text-green-600">
-                ({alreadyGeneratedCount} já gerada{alreadyGeneratedCount !== 1 ? 's' : ''})
-              </span>
-            )}
-          </p>
+            Novo Upload
+          </button>
+          <button
+            onClick={() => setShowConfigModal(true)}
+            className="p-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 transition"
+            title="Configurações"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+          {/* Indicadores de configuração ativa */}
+          {useTestCredentials && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+              TESTE
+            </span>
+          )}
+          {!sendToN8n && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+              N8N OFF
+            </span>
+          )}
         </div>
+        <p
+          style={{
+            fontFamily: 'var(--font-inter)',
+            fontSize: '0.75rem',
+            color: '#64748B',
+          }}
+        >
+          {fileName} • {physicalSales.length} vendas físicas de {totalRows} total
+          {alreadyGeneratedCount > 0 && (
+            <span className="ml-2 text-green-600">
+              ({alreadyGeneratedCount} já gerada{alreadyGeneratedCount !== 1 ? 's' : ''})
+            </span>
+          )}
+        </p>
+      </div>
 
-        {/* Filtros e Botões */}
-        <div className="flex items-center gap-3 flex-wrap">
+      {/* Filtros à esquerda + Botões à direita */}
+      <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        {/* Filtros - Esquerda */}
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Campo de Busca */}
           <div className="relative">
             <input
@@ -2316,17 +2501,17 @@ export default function EtiquetasUpload() {
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="Buscar..."
-              className="pl-9 pr-3 py-1.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              className="pl-8 pr-2 py-1 rounded-md border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
               style={{
                 fontFamily: 'var(--font-inter)',
-                width: '180px',
+                width: '140px',
                 color: '#1E293B',
               }}
             />
             <svg
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              width="16"
-              height="16"
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400"
+              width="14"
+              height="14"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -2338,11 +2523,11 @@ export default function EtiquetasUpload() {
           </div>
 
           {/* Filtro de Status */}
-          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+          <div className="flex items-center gap-0.5 bg-slate-100 rounded-md p-0.5">
             <button
               onClick={() => handleFilterChange('all')}
               disabled={hasSearchText}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+              className={`px-2 py-1 rounded text-xs font-medium transition ${
                 statusFilter === 'all' && !hasSearchText
                   ? 'bg-white text-slate-900 shadow-sm'
                   : hasSearchText
@@ -2356,7 +2541,7 @@ export default function EtiquetasUpload() {
             <button
               onClick={() => handleFilterChange('pending')}
               disabled={hasSearchText}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+              className={`px-2 py-1 rounded text-xs font-medium transition ${
                 statusFilter === 'pending' && !hasSearchText
                   ? 'bg-white text-slate-900 shadow-sm'
                   : hasSearchText
@@ -2370,7 +2555,7 @@ export default function EtiquetasUpload() {
             <button
               onClick={() => handleFilterChange('partial')}
               disabled={hasSearchText}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+              className={`px-2 py-1 rounded text-xs font-medium transition ${
                 statusFilter === 'partial' && !hasSearchText
                   ? 'bg-white text-yellow-700 shadow-sm'
                   : hasSearchText
@@ -2384,7 +2569,7 @@ export default function EtiquetasUpload() {
             <button
               onClick={() => handleFilterChange('generated')}
               disabled={hasSearchText}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+              className={`px-2 py-1 rounded text-xs font-medium transition ${
                 statusFilter === 'generated' && !hasSearchText
                   ? 'bg-white text-green-700 shadow-sm'
                   : hasSearchText
@@ -2397,76 +2582,63 @@ export default function EtiquetasUpload() {
             </button>
             {hasSearchText && (
               <span
-                className="px-3 py-1.5 rounded-md text-sm font-medium bg-orange-100 text-orange-700"
+                className="px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700"
                 style={{ fontFamily: 'var(--font-inter)' }}
               >
                 Busca ({filteredSales.length})
               </span>
             )}
           </div>
+        </div>
 
-          <div className="flex items-center gap-3">
-          <button
-            onClick={resetUpload}
-            disabled={isGenerating}
-            className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50 transition disabled:opacity-50"
-            style={{
-              fontFamily: 'var(--font-inter)',
-              fontWeight: 500,
-              fontSize: '0.875rem',
-              color: '#64748B',
-            }}
-          >
-            Novo Upload
-          </button>
+        {/* Botões de Ação - Direita */}
+        <div className="flex items-center gap-2">
           {/* Botões para etiquetas já geradas (quando só tem já geradas selecionadas, sem pendentes) */}
           {selectedGeneratedCount > 0 && selectedCount === 0 && (
             <>
               <button
                 onClick={handlePrintLabels}
                 disabled={isGenerating}
-                className="px-4 py-2 rounded-lg text-white transition hover:opacity-90 flex items-center gap-2"
+                className="px-2.5 py-1 rounded-md text-white transition hover:opacity-90 flex items-center gap-1.5 text-xs"
                 style={{
                   backgroundColor: '#22C55E',
                   fontFamily: 'var(--font-inter)',
                   fontWeight: 500,
-                  fontSize: '0.875rem',
                 }}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <polyline points="6 9 6 2 18 2 18 9" />
                   <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
                   <rect x="6" y="14" width="12" height="8" />
                 </svg>
-                Imprimir {selectedGeneratedCount} PDF{selectedGeneratedCount !== 1 ? 's' : ''}
+                Imprimir ({selectedGeneratedCount})
               </button>
               <button
                 onClick={handleExportTrackingCSV}
-                className="px-4 py-2 rounded-lg text-white transition hover:opacity-90 flex items-center gap-2"
+                className="px-2.5 py-1 rounded-md text-white transition hover:opacity-90 flex items-center gap-1.5 text-xs"
                 style={{
                   backgroundColor: '#3B82F6',
                   fontFamily: 'var(--font-inter)',
                   fontWeight: 500,
-                  fontSize: '0.875rem',
                 }}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="7 10 12 15 17 10" />
                   <line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
-                Exportar CSV Rastreio
+                Exportar CSV
               </button>
             </>
           )}
           {/* Dropdown de serviço + Botão gerar (quando tem pendentes) */}
           {selectedCount > 0 && (
             <>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <label
                   style={{
                     fontFamily: 'var(--font-inter)',
-                    fontSize: '0.75rem',
+                    fontSize: '0.625rem',
                     color: '#64748B',
                     fontWeight: 500,
                   }}
@@ -2477,11 +2649,12 @@ export default function EtiquetasUpload() {
                   value={selectedServicoEct}
                   onChange={(e) => setSelectedServicoEct(e.target.value)}
                   disabled={isGenerating}
-                  className="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white disabled:opacity-50"
+                  className="px-2 py-1 rounded-md border border-slate-300 text-xs bg-white disabled:opacity-50 text-slate-900"
                   style={{
                     fontFamily: 'var(--font-inter)',
-                    fontSize: '0.875rem',
-                    color: '#314158',
+                    color: '#0f172a',
+                    fontWeight: 600,
+                    WebkitTextFillColor: '#0f172a',
                   }}
                 >
                   {SERVICOS_ECT.map(servico => (
@@ -2496,16 +2669,15 @@ export default function EtiquetasUpload() {
                 <button
                   onClick={handleMergePedidos}
                   disabled={isGenerating}
-                  className="px-4 py-2 rounded-lg text-white transition hover:opacity-90 flex items-center gap-2"
+                  className="px-2.5 py-1 rounded-md text-white transition hover:opacity-90 flex items-center gap-1.5 text-xs"
                   style={{
                     backgroundColor: '#8B5CF6',
                     fontFamily: 'var(--font-inter)',
                     fontWeight: 500,
-                    fontSize: '0.875rem',
                   }}
                   title="Mesclar pedidos selecionados em um único envio"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M8 6h13" />
                     <path d="M8 12h13" />
                     <path d="M8 18h13" />
@@ -2513,32 +2685,30 @@ export default function EtiquetasUpload() {
                     <path d="M3 12h.01" />
                     <path d="M3 18h.01" />
                   </svg>
-                  Mesclar {selectedPendingForMerge}
+                  Mesclar ({selectedPendingForMerge})
                 </button>
               )}
               <button
                 onClick={handleGenerateLabels}
                 disabled={isGenerating}
-                className={`px-4 py-2 rounded-lg text-white transition ${
+                className={`px-2.5 py-1 rounded-md text-white transition text-xs ${
                   isGenerating ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'
                 }`}
                 style={{
                   backgroundColor: '#F97316',
                   fontFamily: 'var(--font-inter)',
                   fontWeight: 500,
-                  fontSize: '0.875rem',
                 }}
               >
                 {isGenerating
                   ? `Gerando ${generationProgress.current}/${generationProgress.total}...`
                   : selectedGeneratedCount > 0
-                    ? `Gerar ${selectedCount} + incluir ${selectedGeneratedCount} no PDF`
-                    : `Gerar ${selectedCount} Etiqueta${selectedCount !== 1 ? 's' : ''}`
+                    ? `Gerar (${selectedCount}) + PDF (${selectedGeneratedCount})`
+                    : `Gerar (${selectedCount})`
                 }
               </button>
             </>
           )}
-        </div>
         </div>
       </div>
 
@@ -2727,8 +2897,8 @@ export default function EtiquetasUpload() {
                         value={sale.enviosTotal}
                         onChange={(e) => updateEnviosTotal(sale.transaction, parseInt(e.target.value))}
                         disabled={isGenerating}
-                        className="px-2 py-1 rounded-md border border-slate-300 text-sm bg-white focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50"
-                        style={{ fontFamily: 'var(--font-inter)' }}
+                        className="px-2 py-1 rounded-md border border-slate-300 text-sm bg-white focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 text-slate-900"
+                        style={{ fontFamily: 'var(--font-inter)', color: '#0f172a', fontWeight: 500 }}
                       >
                         <option value={1}>1</option>
                         <option value={2}>2</option>
@@ -3937,6 +4107,423 @@ export default function EtiquetasUpload() {
                 }}
               >
                 Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Configurações */}
+      {showConfigModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setShowConfigModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '500px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+              <h3
+                style={{
+                  margin: 0,
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '1.125rem',
+                  fontWeight: 600,
+                  color: '#1E293B',
+                }}
+              >
+                ⚙️ Configurações
+              </h3>
+              <button
+                onClick={() => setShowConfigModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.25rem' }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Toggle: Modo Teste VIPP */}
+            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: useTestCredentials ? '#FEF3C7' : '#F8FAFC', borderRadius: '0.75rem', border: useTestCredentials ? '1px solid #FCD34D' : '1px solid #E2E8F0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#1E293B' }}>
+                    🧪 Modo Teste (VIPP)
+                  </p>
+                  <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                    Usa credenciais de homologação para gerar etiquetas de teste
+                  </p>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '24px' }}>
+                  <input
+                    type="checkbox"
+                    checked={useTestCredentials}
+                    onChange={(e) => setUseTestCredentials(e.target.checked)}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={{
+                    position: 'absolute',
+                    cursor: 'pointer',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: useTestCredentials ? '#F59E0B' : '#CBD5E1',
+                    borderRadius: '24px',
+                    transition: '0.3s',
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      content: '""',
+                      height: '18px',
+                      width: '18px',
+                      left: useTestCredentials ? '27px' : '3px',
+                      bottom: '3px',
+                      backgroundColor: '#FFF',
+                      borderRadius: '50%',
+                      transition: '0.3s',
+                    }} />
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Toggle: Enviar para N8N */}
+            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: sendToN8n ? '#F0FDF4' : '#FEF2F2', borderRadius: '0.75rem', border: sendToN8n ? '1px solid #86EFAC' : '1px solid #FECACA' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#1E293B' }}>
+                    📤 Enviar para N8N/Webhook
+                  </p>
+                  <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                    Dispara webhook após gerar etiquetas (admin sempre recebe)
+                  </p>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '24px' }}>
+                  <input
+                    type="checkbox"
+                    checked={sendToN8n}
+                    onChange={(e) => setSendToN8n(e.target.checked)}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={{
+                    position: 'absolute',
+                    cursor: 'pointer',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: sendToN8n ? '#22C55E' : '#EF4444',
+                    borderRadius: '24px',
+                    transition: '0.3s',
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      content: '""',
+                      height: '18px',
+                      width: '18px',
+                      left: sendToN8n ? '27px' : '3px',
+                      bottom: '3px',
+                      backgroundColor: '#FFF',
+                      borderRadius: '50%',
+                      transition: '0.3s',
+                    }} />
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Toggle: Notificar Cliente */}
+            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: sendClientNotification ? '#EFF6FF' : '#F8FAFC', borderRadius: '0.75rem', border: sendClientNotification ? '1px solid #93C5FD' : '1px solid #E2E8F0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#1E293B' }}>
+                    📱 Notificar Cliente (WhatsApp)
+                  </p>
+                  <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                    Envia código de rastreio para o cliente via Evolution
+                  </p>
+                </div>
+                <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '24px' }}>
+                  <input
+                    type="checkbox"
+                    checked={sendClientNotification}
+                    onChange={(e) => setSendClientNotification(e.target.checked)}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={{
+                    position: 'absolute',
+                    cursor: 'pointer',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: sendClientNotification ? '#3B82F6' : '#CBD5E1',
+                    borderRadius: '24px',
+                    transition: '0.3s',
+                  }}>
+                    <span style={{
+                      position: 'absolute',
+                      content: '""',
+                      height: '18px',
+                      width: '18px',
+                      left: sendClientNotification ? '27px' : '3px',
+                      bottom: '3px',
+                      backgroundColor: '#FFF',
+                      borderRadius: '50%',
+                      transition: '0.3s',
+                    }} />
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Campos de telefone */}
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', fontWeight: 600, color: '#64748B', marginBottom: '0.375rem' }}>
+                📞 Telefone Admin (notificações)
+              </label>
+              <input
+                type="text"
+                value={adminPhone}
+                onChange={(e) => setAdminPhone(e.target.value.replace(/\D/g, ''))}
+                placeholder="5585999999999"
+                style={{
+                  width: '100%',
+                  padding: '0.625rem 0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  color: '#1E293B',
+                  backgroundColor: '#FFF',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '0.5rem',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', fontWeight: 600, color: '#64748B', marginBottom: '0.375rem' }}>
+                🧪 Telefone Teste Cliente (substitui telefone real)
+              </label>
+              <input
+                type="text"
+                value={clientPhoneOverride}
+                onChange={(e) => setClientPhoneOverride(e.target.value.replace(/\D/g, ''))}
+                placeholder="Vazio = usa telefone do CSV"
+                style={{
+                  width: '100%',
+                  padding: '0.625rem 0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  color: '#1E293B',
+                  backgroundColor: '#FFF',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: '0.5rem',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.625rem', color: '#94A3B8' }}>
+                Se preenchido, todas as notificações de cliente vão para este número (para testes)
+              </p>
+            </div>
+
+            {/* Botão fechar */}
+            <button
+              onClick={() => {
+                handleSaveSettings();
+                setShowConfigModal(false);
+              }}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                fontWeight: 500,
+                color: '#FFF',
+                backgroundColor: '#3B82F6',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+              }}
+            >
+              Salvar e Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação Unificado (Produção + Cliente) */}
+      {showGenerationConfirmModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+          }}
+          onClick={() => {
+            setShowGenerationConfirmModal(false);
+            setConfirmEtiquetasText('');
+            setConfirmEnviarText('');
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '450px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                margin: '0 0 1rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '1.125rem',
+                fontWeight: 600,
+                color: '#DC2626',
+              }}
+            >
+              ⚠️ Confirmação Necessária
+            </h3>
+
+            {/* Aviso de Produção */}
+            {needsProductionConfirm && (
+              <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem' }}>
+                <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#991B1B' }}>
+                  🏭 MODO PRODUÇÃO
+                </p>
+                <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#991B1B' }}>
+                  Etiquetas reais serão geradas nos Correios. Esta ação não pode ser desfeita.
+                </p>
+                <div style={{ marginTop: '0.75rem' }}>
+                  <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                    Digite <strong>&quot;etiquetas&quot;</strong> para confirmar:
+                  </p>
+                  <input
+                    type="text"
+                    value={confirmEtiquetasText}
+                    onChange={(e) => setConfirmEtiquetasText(e.target.value)}
+                    placeholder="etiquetas"
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem 0.75rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.875rem',
+                      color: '#1E293B',
+                      backgroundColor: confirmEtiquetasText.toLowerCase() === 'etiquetas' ? '#D1FAE5' : '#FFF',
+                      border: confirmEtiquetasText.toLowerCase() === 'etiquetas' ? '1px solid #10B981' : '1px solid #E2E8F0',
+                      borderRadius: '0.5rem',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Aviso de Notificação Cliente */}
+            {needsClientConfirm && (
+              <div style={{ backgroundColor: '#EFF6FF', border: '1px solid #93C5FD', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem' }}>
+                <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#1E40AF' }}>
+                  📱 NOTIFICAÇÃO AO CLIENTE
+                </p>
+                <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#1E40AF' }}>
+                  Os clientes receberão mensagem no WhatsApp com o código de rastreio.
+                </p>
+                <div style={{ marginTop: '0.75rem' }}>
+                  <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                    Digite <strong>&quot;enviar&quot;</strong> para confirmar:
+                  </p>
+                  <input
+                    type="text"
+                    value={confirmEnviarText}
+                    onChange={(e) => setConfirmEnviarText(e.target.value)}
+                    placeholder="enviar"
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem 0.75rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.875rem',
+                      color: '#1E293B',
+                      backgroundColor: confirmEnviarText.toLowerCase() === 'enviar' ? '#DBEAFE' : '#FFF',
+                      border: confirmEnviarText.toLowerCase() === 'enviar' ? '1px solid #3B82F6' : '1px solid #E2E8F0',
+                      borderRadius: '0.5rem',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Resumo */}
+            <div style={{ backgroundColor: '#F8FAFC', borderRadius: '0.5rem', padding: '0.75rem', marginBottom: '1rem' }}>
+              <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                <strong>{pendingGeneration.length}</strong> etiqueta(s) serão geradas
+                {sendToN8n && <span> • Webhook ativo</span>}
+                {sendClientNotification && clientPhoneOverride && <span> • Teste: {clientPhoneOverride}</span>}
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={() => {
+                  setShowGenerationConfirmModal(false);
+                  setConfirmEtiquetasText('');
+                  setConfirmEnviarText('');
+                }}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#64748B',
+                  backgroundColor: '#F1F5F9',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmGeneration}
+                disabled={!isConfirmationValid()}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#FFF',
+                  backgroundColor: isConfirmationValid() ? '#DC2626' : '#9CA3AF',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: isConfirmationValid() ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Confirmar Geração
               </button>
             </div>
           </div>
