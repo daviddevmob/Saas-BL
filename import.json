@@ -1,0 +1,287 @@
+{
+    "name": "Hotmart → Datacrazy + WhatsApp",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "hotmart-webhook",
+                "options": {}
+            },
+            "id": "webhook-hotmart",
+            "name": "Webhook Hotmart",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                250,
+                300
+            ],
+            "webhookId": "hotmart-webhook"
+        },
+        {
+            "parameters": {
+                "jsCode": "// Formatar dados do webhook Hotmart\nconst input = $input.first().json;\nconst body = input.body || input;\nconst data = body.data || body;\nconst buyer = 
+  data.buyer || {};\nconst purchase = data.purchase || {};\nconst address = buyer.address || {};\n\n // Telefone\nlet phone = buyer.checkout_phone || buyer.phone || '';\nconst 
+  phoneCode = buyer.checkout_phone_code || '';\nif (phone && !phone.startsWith('55') && phoneCode) {\n  phone = phoneCode + phone;\n
+                }\nphone = phone.replace(/\\D/g, '');\n\n // 
+  Nome\nconst name = buyer.name || `${buyer.first_name || ''
+                } ${buyer.last_name || ''
+                }`.trim() || 'Cliente';\n\nreturn [
+                    { json: {\n // Evento\n  event: body.event || '',\n  hottok: 
+  body.hottok || '',\n  \n // Comprador\n  telefone: phone,\n  nome: name,\n  email: buyer.email || '',\n  documento: buyer.document || '',\n  \n  // Produto\n  produto: 
+  data.product?.name || '',\n  produtoId: data.product?.id || data.product?.ucode || '',\n  \n // Compra\n  transactionId: purchase.transaction || '',\n  valor: purchase.price?.value
+   || purchase.original_offer_price?.value || 0,\n  dataPedido: purchase.order_date ? new Date(purchase.order_date).toISOString() : new Date().toISOString(),\n  status: 
+  purchase.status || '',\n  \n // Endereço\n  endereco: {\n    logradouro: address.address || '',\n    numero: address.number || '',\n    complemento: address.complement || '',\n    
+  bairro: address.neighborhood || '',\n    cidade: address.city || '',\n    uf: address.state || '',\n    cep: address.zipcode || ''\n
+                        }\n
+                    }
+                }
+            ];"
+        },
+        "id": "format-data",
+        "name": "Formatar Dados",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+            480,
+            300
+        ]
+    },
+    {
+        "parameters": {
+            "jsCode": "// Datacrazy - Criar Lead e Business\nconst HOTTOK = 'SSF4gejPRrOXZFefyrZzy2wm2OJwMbf4fc7e40-58f3-4845-a233-d7293b87b299';\nconst DATACRAZY_TOKEN = 
+  'dc_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5MzcyODRjYTc3MWNkZmY4MGJjMjc2ZiIsInRlbmFudElkIjoiNjdmN2E5ODAtODk0YS00Nzk5LThjMDMtZTYyNGY5ZWRhNTY3IiwibmFtZSI6Ik44biAtIGR2IiwiaWF0
+  IjoxNzY1MjIyNDc2LCJleHAiOjE5MjQ5MTYzOTl9.eii1aUDplkPh1Y2Rt5W0EhTqaQ4uvr2ClV0_OBOSvDU';\nconst API_URL = 'https: //api.g1.datacrazy.io/api/v1';\nconst STAGE_APPROVED = 
+  '0c2bf45f-1c4b-4730-b02c-286b7c018f29';\n\nconst input = $input.first().json;\n\n // Validar Hottok\nif (input.hottok && input.hottok !== HOTTOK) {\n  return [{ json: { ...input, 
+  datacrazy: { status: 'error', reason: 'Invalid hottok'
+            }
+        }
+    }
+];\n
+}\n\n // Só processar compras aprovadas\nif (input.event !== 'PURCHASE_COMPLETE' && input.event !== 
+  'PURCHASE_APPROVED') {\n  return [
+    { json: { ...input, datacrazy: { status: 'ignored', reason: 'Not a purchase event'
+            }
+        }
+    }
+];\n
+}\n\nif (!input.email) {\n  return [
+    { json: { ...input,
+   datacrazy: { status: 'error', reason: 'No email'
+            }
+        }
+    }
+];\n
+}\n\nlet leadId;\nlet leadTags = [];\nlet leadCreated = false;\nlet businessCreated = false;\n\ntry {\n // Buscar Lead\n 
+   const leadData = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${API_URL
+    }/leads?search=${encodeURIComponent(input.email)
+    }`,\n    headers: { 'Authorization': 
+  `Bearer ${DATACRAZY_TOKEN
+        }`
+    },\n    json: true\n
+});\n  \n  if (leadData.count === 0) {\n // Criar Lead\n    const newLead = await this.helpers.httpRequest({\n      method: 
+  'POST',\n      url: `${API_URL
+    }/leads`,\n      headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN
+        }`, 'Content-Type': 'application/json'
+    },\n      body: { \n        name: 
+  input.nome, \n        email: input.email, \n        phone: input.telefone || undefined,\n        taxId: input.documento || undefined,\n        address: input.endereco?.cep ? {\n    
+        zip: input.endereco.cep,\n          address: `${input.endereco.logradouro
+            }, ${input.endereco.numero
+            }`.trim(),\n          city: input.endereco.cidade,\n          state: 
+  input.endereco.uf,\n          country: 'Brasil'\n
+        } : undefined,\n        source: 'Hotmart Webhook' \n
+    },\n      json: true\n
+});\n    leadId = newLead.id;\n    
+  leadCreated = true;\n
+} else {\n    leadId = leadData.data[
+    0
+].id;\n    leadTags = leadData.data[
+    0
+].tags || [];\n    \n // Atualizar telefone se não existir\n    if 
+  (input.telefone && !leadData.data[
+    0
+].phone) {\n      await this.helpers.httpRequest({\n        method: 'PATCH',\n        url: `${API_URL
+        }/leads/${leadId
+        }`,\n        headers: { 
+  'Authorization': `Bearer ${DATACRAZY_TOKEN
+            }`, 'Content-Type': 'application/json'
+        },\n        body: { phone: input.telefone
+        },\n        json: true\n
+    });\n
+}\n
+}\n  \n // 
+  Tag do Produto\n  if (input.produto) {\n    try {\n      const tagData = await this.helpers.httpRequest({\n        method: 'GET',\n        url: 
+  `${API_URL
+        }/tags?search=${encodeURIComponent(input.produto)
+        }`,\n        headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN
+            }`
+        },\n        json: true\n
+    });\n      \n      if 
+  (tagData.data?.[
+        0
+    ] && !leadTags.some(t => t.id === tagData.data[
+        0
+    ].id)) {\n        await this.helpers.httpRequest({\n          method: 'PATCH',\n          url: 
+  `${API_URL
+            }/leads/${leadId
+            }`,\n          headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN
+                }`, 'Content-Type': 'application/json'
+            },\n          body: { tags: [...leadTags.map(t 
+  => ({ id: t.id
+                    })),
+                    { id: tagData.data[
+                            0
+                        ].id
+                    }
+                ]
+            },\n          json: true\n
+        });\n
+    }\n
+} catch (e) {}\n
+}\n  \n // Verificar Business existente\n  const leadBizData =
+   await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${API_URL
+}/leads/${leadId
+}/businesses`,\n    headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN
+    }`
+},\n    json: 
+  true\n
+});\n  \n  if (!leadBizData?.data?.find(b => b.externalId === input.transactionId)) {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 
+  `${API_URL
+    }/businesses`,\n      headers: { 'Authorization': `Bearer ${DATACRAZY_TOKEN
+        }`, 'Content-Type': 'application/json'
+    },\n      body: { leadId, stageId: STAGE_APPROVED, 
+  externalId: input.transactionId, total: input.valor
+    },\n      json: true\n
+});\n    businessCreated = true;\n
+}\n  \n  return [
+{ json: { ...input, datacrazy: { status: 
+  businessCreated ? 'created' : 'exists', leadId, leadCreated, businessCreated
+        }
+    }
+}
+];\n  \n
+} catch (e) {\n  return [
+{ json: { ...input, datacrazy: { status: 'error', error: e.message
+        }
+    }
+}
+];\n
+}"
+},
+"id": "datacrazy-sync",
+"name": "Datacrazy Sync",
+"type": "n8n-nodes-base.code",
+"typeVersion": 2,
+"position": [
+760,
+200
+]
+},
+{
+"parameters": {
+"method": "POST",
+"url": "https://wpp.hubfy.brandinglab.com.br/message/sendText/WA-1391",
+"sendHeaders": true,
+"headerParameters": {
+"parameters": [
+{
+    "name": "apikey",
+    "value": "1CF98775E8E6-4779-BA47-1C817BC9DF85"
+},
+{
+    "name": "Content-Type",
+    "value": "application/json"
+}
+]
+},
+"sendBody": true,
+"specifyBody": "json",
+"jsonBody": "={\n  \"number\": \"{{ $json.telefone }}\",\n  \"text\": \"🎉 *Compra Confirmada!*\\n\\nOlá {{ $json.nome }}!\\n\\nSua compra do produto *{{ $json.produto }}* 
+  foi aprovada com sucesso!\\n\\n📦 Pedido: {
+{ $json.transactionId
+}
+}\\n💰 Valor: R$ {
+{ $json.valor
+}
+}\\n\\nObrigado pela confiança!\",\n  \"linkPreview\": false\n}",
+"options": {}
+},
+"id": "whatsapp-evolution",
+"name": "WhatsApp Evolution",
+"type": "n8n-nodes-base.httpRequest",
+"typeVersion": 4.2,
+"position": [
+760,
+400
+]
+},
+{
+"parameters": {},
+"id": "noop-end",
+"name": "Fim",
+"type": "n8n-nodes-base.noOp",
+"typeVersion": 1,
+"position": [
+1040,
+300
+]
+}
+],
+"connections": {
+"Webhook Hotmart": {
+"main": [
+[
+{
+"node": "Formatar Dados",
+"type": "main",
+"index": 0
+}
+]
+]
+},
+"Formatar Dados": {
+"main": [
+[
+{
+"node": "Datacrazy Sync",
+"type": "main",
+"index": 0
+},
+{
+"node": "WhatsApp Evolution",
+"type": "main",
+"index": 0
+}
+]
+]
+},
+"Datacrazy Sync": {
+"main": [
+[
+{
+"node": "Fim",
+"type": "main",
+"index": 0
+}
+]
+]
+},
+"WhatsApp Evolution": {
+"main": [
+[
+{
+"node": "Fim",
+"type": "main",
+"index": 0
+}
+]
+]
+}
+},
+"pinData": {},
+"settings": {
+"executionOrder": "v1"
+},
+"staticData": null,
+"tags": [],
+"triggerCount": 0
+}

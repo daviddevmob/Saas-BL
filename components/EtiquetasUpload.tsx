@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import Papa from 'papaparse';
 import { db } from '@/lib/firebase';
@@ -110,6 +110,36 @@ async function fetchMappingTemplates(): Promise<MappingTemplate[]> {
     console.error('Erro ao buscar templates:', err);
     return [];
   }
+}
+
+// Função para parsear data em qualquer formato (BR ou ISO)
+function parseDate(dateStr: string): number {
+  if (!dateStr) return 0;
+
+  // Tentar formato ISO primeiro (YYYY-MM-DD ou com T)
+  let date = new Date(dateStr);
+  if (!isNaN(date.getTime())) {
+    return date.getTime();
+  }
+
+  // Tentar formato brasileiro DD/MM/YYYY ou DD/MM/YYYY HH:mm:ss
+  const brMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (brMatch) {
+    const [, day, month, year, hour = '0', minute = '0', second = '0'] = brMatch;
+    date = new Date(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour),
+      parseInt(minute),
+      parseInt(second)
+    );
+    if (!isNaN(date.getTime())) {
+      return date.getTime();
+    }
+  }
+
+  return 0;
 }
 
 async function saveMappingTemplate(name: string, mapping: ColumnMapping, logo?: string): Promise<string> {
@@ -245,6 +275,7 @@ interface PhysicalSale {
   isMerged?: boolean; // Este pedido foi criado por merge
   mergedTransactions?: string[]; // Lista de transactionIds originais (se mesclado)
   mergedProductNames?: string[]; // Lista de nomes de produtos (se mesclado)
+  mergedOriginalSales?: OriginalSaleData[]; // Dados completos para restauração
   mergedInto?: string; // Se este pedido foi mesclado em outro, qual é o ID
 }
 
@@ -345,7 +376,8 @@ async function saveLabel(
   envioNumero: number,
   enviosTotal: number,
   mergedTransactionIds?: string[],
-  produtos?: string[]
+  produtos?: string[],
+  observacaoEnvio?: string
 ): Promise<void> {
   try {
     const docData: Record<string, unknown> = {
@@ -363,6 +395,10 @@ async function saveLabel(
     }
     if (produtos && produtos.length > 0) {
       docData.produtos = produtos;
+    }
+    // Adicionar observação do envio parcial se existir
+    if (observacaoEnvio) {
+      docData.observacaoEnvio = observacaoEnvio;
     }
 
     await addDoc(collection(db, 'etiquetas'), docData);
@@ -384,6 +420,98 @@ interface EtiquetasSettings {
 
 // ID fixo do documento de configurações
 const SETTINGS_DOC_ID = 'etiquetas_config';
+
+// Interface para dados originais de uma venda (para restauração completa)
+interface OriginalSaleData {
+  transaction: string;
+  productName: string;
+  productCode: string;
+  totalPrice: string;
+  document: string;
+  saleDate: string;
+  // Campos adicionais para restauração completa
+  phone: string;
+  country: string;
+  servicoEct: string;
+  // Campos de etiqueta para restauração do status
+  etiquetaStatus?: 'pending' | 'generated' | 'partial' | 'error';
+  etiqueta?: string;
+  etiquetas?: string[];
+  enviosTotal: number;
+  enviosRealizados: number;
+}
+
+// Interface para merge salvo no Firebase
+interface SavedMerge {
+  mergeId: string; // ID único e consistente do merge
+  originalSales: OriginalSaleData[]; // Dados completos dos pedidos originais
+  createdAt: Timestamp;
+}
+
+// Gerar ID consistente para merge baseado nos IDs das transações
+function generateMergeId(transactions: string[]): string {
+  // Usar hash simples dos IDs ordenados para evitar problemas com underscores
+  const sorted = [...transactions].sort();
+  return `MERGED_${sorted.map(t => t.replace(/[^a-zA-Z0-9]/g, '')).join('-')}`;
+}
+
+// Carregar merges salvos do Firebase
+async function loadSavedMerges(): Promise<SavedMerge[]> {
+  try {
+    const mergesRef = collection(db, 'etiquetas_merges');
+    const snapshot = await getDocs(mergesRef);
+    return snapshot.docs.map(doc => doc.data() as SavedMerge);
+  } catch (err) {
+    console.error('Erro ao carregar merges:', err);
+    return [];
+  }
+}
+
+// Limpar campos undefined para o Firebase (não aceita undefined)
+function sanitizeForFirebase<T extends Record<string, unknown>>(obj: T): T {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result as T;
+}
+
+// Salvar merge no Firebase
+async function saveMergeToFirebase(originalSales: OriginalSaleData[]): Promise<string> {
+  try {
+    const mergesRef = collection(db, 'etiquetas_merges');
+    const transactions = originalSales.map(s => s.transaction);
+    const mergeId = generateMergeId(transactions);
+    // Usar mergeId como ID do documento para evitar duplicatas
+    const docRef = doc(mergesRef, mergeId);
+    // Sanitizar cada sale para remover campos undefined
+    const sanitizedSales = originalSales.map(sale => sanitizeForFirebase(sale as unknown as Record<string, unknown>));
+    await setDoc(docRef, {
+      mergeId,
+      originalSales: sanitizedSales,
+      createdAt: Timestamp.now(),
+    });
+    console.log('Merge salvo no Firebase:', mergeId, transactions);
+    return mergeId;
+  } catch (err) {
+    console.error('Erro ao salvar merge:', err);
+    return '';
+  }
+}
+
+// Remover merge do Firebase
+async function removeMergeFromFirebase(mergeId: string): Promise<void> {
+  try {
+    const mergesRef = collection(db, 'etiquetas_merges');
+    const docRef = doc(mergesRef, mergeId);
+    await deleteDoc(docRef);
+    console.log('Merge removido do Firebase:', mergeId);
+  } catch (err) {
+    console.error('Erro ao remover merge:', err);
+  }
+}
 
 // Carregar configurações do Firebase
 async function loadEtiquetasSettings(): Promise<EtiquetasSettings | null> {
@@ -422,13 +550,17 @@ export default function EtiquetasUpload() {
   const [totalRows, setTotalRows] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0, success: 0, errors: 0 });
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'partial' | 'generated'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'partial' | 'generated' | 'merge'>('all');
   const [selectedServicoEct, setSelectedServicoEct] = useState(DEFAULT_SERVICO_ECT);
   const [showServiceConfirmModal, setShowServiceConfirmModal] = useState(false);
   const [pendingGeneration, setPendingGeneration] = useState<PhysicalSale[]>([]);
   const [searchText, setSearchText] = useState('');
   const [showMergeWarningModal, setShowMergeWarningModal] = useState(false);
   const [pendingMerge, setPendingMerge] = useState<PhysicalSale[]>([]);
+  const [mergeDetailsSale, setMergeDetailsSale] = useState<PhysicalSale | null>(null);
+  // Modal para merge com status misto (gerado + pendente)
+  const [showMergeStatusModal, setShowMergeStatusModal] = useState(false);
+  const [mergeStatusChoice, setMergeStatusChoice] = useState<'use_existing' | 'generate_new' | null>(null);
   // Estados para mapeamento de colunas CSV
   const [showColumnMappingModal, setShowColumnMappingModal] = useState(false);
   const [csvColumns, setCsvColumns] = useState<string[]>([]);
@@ -465,6 +597,9 @@ export default function EtiquetasUpload() {
   const [showGenerationConfirmModal, setShowGenerationConfirmModal] = useState(false); // Modal de confirmação geração
   const [confirmEtiquetasText, setConfirmEtiquetasText] = useState(''); // Texto de confirmação "etiquetas" (produção)
   const [confirmEnviarText, setConfirmEnviarText] = useState(''); // Texto de confirmação "enviar" (cliente)
+  const [envioObservacoes, setEnvioObservacoes] = useState<Record<string, string>>({}); // Observações para envios parciais (key = transactionId)
+  const [ordemPrioridade, setOrdemPrioridade] = useState<'antigos' | 'novos'>('antigos'); // Ordem de prioridade: antigos primeiro ou novos primeiro
+  const [observacaoGeral, setObservacaoGeral] = useState(''); // Observação geral para mensagem do admin
   const [showNewUploadConfirm, setShowNewUploadConfirm] = useState(false); // Modal de confirmação novo upload
 
   // Carregar templates do Firebase ao montar
@@ -534,7 +669,7 @@ export default function EtiquetasUpload() {
   }, []);
 
   // Desmarcar todas ao mudar filtro ou busca
-  const handleFilterChange = (newFilter: 'all' | 'pending' | 'partial' | 'generated') => {
+  const handleFilterChange = (newFilter: 'all' | 'pending' | 'partial' | 'generated' | 'merge') => {
     setStatusFilter(newFilter);
     setPhysicalSales(prev => prev.map(s => ({ ...s, selected: false })));
   };
@@ -550,42 +685,126 @@ export default function EtiquetasUpload() {
   // Verificar se busca tem texto válido (não só espaços)
   const hasSearchText = searchText.trim().length > 0;
 
+  // Função para criar chave única de agrupamento (email + nome + endereço)
+  const getMergeKey = (sale: PhysicalSale) => {
+    const normalizeStr = (s: string) => s.toLowerCase().trim();
+    return `${normalizeStr(sale.email)}|${normalizeStr(sale.name)}|${normalizeStr(sale.address)}|${normalizeStr(sale.number || '')}|${normalizeStr(sale.zip || '')}`;
+  };
+
+  // Identificar candidatos a merge: itens com mesmo email+nome+endereço (pendentes ou gerados)
+  const mergeCandidateKeys = useMemo(() => {
+    const visibleSales = physicalSales.filter(s => !s.mergedInto);
+    // Considerar pendentes E gerados como possíveis candidatos a merge
+    const eligibleSales = visibleSales.filter(s =>
+      !s.isMerged && (s.etiquetaStatus === 'pending' || s.etiquetaStatus === 'generated' || s.etiquetaStatus === 'partial')
+    );
+    const keyCount: Record<string, number> = {};
+
+    eligibleSales.forEach(sale => {
+      const key = getMergeKey(sale);
+      keyCount[key] = (keyCount[key] || 0) + 1;
+    });
+
+    // Retorna apenas chaves que aparecem mais de uma vez (candidatos a merge)
+    return new Set(Object.entries(keyCount).filter(([, count]) => count > 1).map(([key]) => key));
+  }, [physicalSales]);
+
+  // Contar itens para o filtro de merge
+  const mergeFilterCount = useMemo(() => {
+    const visibleSales = physicalSales.filter(s => !s.mergedInto);
+    const mergedItems = visibleSales.filter(s => s.isMerged);
+    // Considerar pendentes E gerados como candidatos
+    const candidateItems = visibleSales.filter(s =>
+      !s.isMerged &&
+      (s.etiquetaStatus === 'pending' || s.etiquetaStatus === 'generated' || s.etiquetaStatus === 'partial') &&
+      mergeCandidateKeys.has(getMergeKey(s))
+    );
+    return mergedItems.length + candidateItems.length;
+  }, [physicalSales, mergeCandidateKeys]);
+
   // Filtrar vendas pelo status e busca
-  const filteredSales = physicalSales.filter(sale => {
-    // Ocultar pedidos que foram mesclados em outro
-    if (sale.mergedInto) return false;
+  const filteredSales = useMemo(() => {
+    let result = physicalSales.filter(sale => {
+      // Ocultar pedidos que foram mesclados em outro
+      if (sale.mergedInto) return false;
 
-    // Primeiro filtrar por status
-    let passesStatusFilter = true;
-    if (statusFilter === 'pending') passesStatusFilter = sale.etiquetaStatus === 'pending';
-    if (statusFilter === 'partial') passesStatusFilter = sale.etiquetaStatus === 'partial';
-    if (statusFilter === 'generated') passesStatusFilter = sale.etiquetaStatus === 'generated';
+      // Primeiro filtrar por status
+      let passesStatusFilter = true;
+      if (statusFilter === 'pending') {
+        // Pendentes: status pending OU itens mesclados com status pending
+        passesStatusFilter = sale.etiquetaStatus === 'pending';
+      }
+      if (statusFilter === 'partial') {
+        // Parciais: status partial OU itens mesclados com status partial
+        passesStatusFilter = sale.etiquetaStatus === 'partial';
+      }
+      if (statusFilter === 'generated') {
+        // Gerados: status generated OU itens mesclados com status generated
+        passesStatusFilter = sale.etiquetaStatus === 'generated';
+      }
+      if (statusFilter === 'merge') {
+        // Mesclar: APENAS itens mesclados E candidatos a merge (não duplica nos outros filtros)
+        const isMergedItem = sale.isMerged;
+        const isCandidate = !sale.isMerged &&
+          (sale.etiquetaStatus === 'pending' || sale.etiquetaStatus === 'generated' || sale.etiquetaStatus === 'partial') &&
+          mergeCandidateKeys.has(getMergeKey(sale));
+        passesStatusFilter = isMergedItem || isCandidate;
+      }
 
-    if (!passesStatusFilter) return false;
+      if (!passesStatusFilter) return false;
 
-    // Se tem texto de busca, filtrar por ele
-    if (hasSearchText) {
-      const searchNormalized = normalizeText(searchText);
-      const fieldsToSearch = [
-        sale.name,
-        sale.email,
-        sale.phone,
-        sale.transaction,
-        sale.productName,
-        sale.city,
-        sale.state,
-        sale.neighborhood,
-        sale.address,
-        sale.zip,
-        sale.etiqueta || '',
-      ];
-      return fieldsToSearch.some(field =>
-        normalizeText(field).includes(searchNormalized)
-      );
+      // Se tem texto de busca, filtrar por ele
+      if (hasSearchText) {
+        const searchNormalized = normalizeText(searchText);
+        const fieldsToSearch = [
+          sale.name,
+          sale.email,
+          sale.phone,
+          sale.transaction,
+          sale.productName,
+          sale.city,
+          sale.state,
+          sale.neighborhood,
+          sale.address,
+          sale.zip,
+          sale.etiqueta || '',
+        ];
+        return fieldsToSearch.some(field =>
+          normalizeText(field).includes(searchNormalized)
+        );
+      }
+
+      return true;
+    });
+
+    // Ordenar resultados (sempre ordena por data, mais recente primeiro)
+    if (statusFilter === 'merge') {
+      // Para o filtro de merge: mesclados primeiro (por data), depois candidatos agrupados
+      result.sort((a, b) => {
+        // Mesclados primeiro
+        if (a.isMerged && !b.isMerged) return -1;
+        if (!a.isMerged && b.isMerged) return 1;
+
+        // Entre mesclados, ordenar por data (mais recente primeiro)
+        if (a.isMerged && b.isMerged) {
+          return parseDate(b.saleDate) - parseDate(a.saleDate);
+        }
+
+        // Entre candidatos, agrupar por chave de merge
+        const keyA = getMergeKey(a);
+        const keyB = getMergeKey(b);
+        if (keyA !== keyB) return keyA.localeCompare(keyB);
+
+        // Dentro do mesmo grupo, ordenar por data
+        return parseDate(b.saleDate) - parseDate(a.saleDate);
+      });
+    } else {
+      // Para outros filtros: ordenar por data (mais recente primeiro)
+      result.sort((a, b) => parseDate(b.saleDate) - parseDate(a.saleDate));
     }
 
-    return true;
-  });
+    return result;
+  }, [physicalSales, statusFilter, hasSearchText, searchText, mergeCandidateKeys]);
 
   const handleFile = async (file: File) => {
     console.log('[CSV] Iniciando processamento do arquivo:', file.name);
@@ -711,7 +930,13 @@ export default function EtiquetasUpload() {
           phone: row[mapping.phone] || '',
           zip: row[mapping.zip] || '',
           city: row[mapping.city] || '',
-          state: row[mapping.state] || '',
+          state: (() => {
+            const stateValue = row[mapping.state] || '';
+            if (!stateValue) {
+              console.warn(`[CSV DEBUG] Estado vazio para ${row[mapping.name]}. Coluna mapeada: "${mapping.state}"`);
+            }
+            return stateValue;
+          })(),
           neighborhood: row[mapping.neighborhood] || '',
           country: row[mapping.country] || '',
           address: row[mapping.address] || '',
@@ -755,7 +980,64 @@ export default function EtiquetasUpload() {
         };
       });
 
-      setPhysicalSales(withLabels);
+      // Auto-merge: Carregar merges salvos do Firebase e aplicar
+      const savedMerges = await loadSavedMerges();
+      let finalSales: PhysicalSale[] = [...withLabels];
+
+      for (const merge of savedMerges) {
+        // Extrair transações originais do merge salvo
+        const originalTransactions = merge.originalSales.map(s => s.transaction);
+
+        // Encontrar quais transações do merge estão presentes nos dados atuais
+        const presentTransactions = originalTransactions.filter(
+          transId => finalSales.some(s => s.transaction === transId)
+        );
+
+        if (presentTransactions.length > 0) {
+          // Pelo menos uma transação do merge está presente - aplicar merge
+          const salesToMerge = finalSales.filter(s =>
+            originalTransactions.includes(s.transaction)
+          );
+
+          if (salesToMerge.length > 0) {
+            // Usar o primeiro pedido encontrado como base
+            const baseSale = salesToMerge[0];
+
+            // Usar o mergeId consistente do Firebase
+            const mergedId = merge.mergeId;
+
+            // Usar dados do Firebase para produtos (garante consistência mesmo se parcial)
+            const allProducts = merge.originalSales.map(s => s.productName);
+            const allProductCodes = merge.originalSales.map(s => s.productCode);
+
+            // Criar pedido mesclado com dados completos do Firebase
+            const mergedSale: PhysicalSale = {
+              ...baseSale,
+              transaction: mergedId,
+              productName: allProducts.join('\n'),
+              productCode: allProductCodes.join(','),
+              selected: false,
+              isMerged: true,
+              mergedTransactions: originalTransactions,
+              mergedProductNames: allProducts,
+              mergedOriginalSales: merge.originalSales,
+              enviosTotal: baseSale.enviosTotal || 1,
+              enviosRealizados: baseSale.enviosRealizados || 0,
+              etiquetaStatus: baseSale.etiquetaStatus || 'pending',
+            };
+
+            // Remover os originais e adicionar o mesclado
+            finalSales = [
+              ...finalSales.filter(s => !originalTransactions.includes(s.transaction)),
+              mergedSale,
+            ];
+
+            console.log('Auto-merge aplicado:', originalTransactions, '→', mergedId);
+          }
+        }
+      }
+
+      setPhysicalSales(finalSales);
     } catch (err) {
       setError('Erro ao processar o arquivo CSV');
       console.error(err);
@@ -1073,69 +1355,170 @@ export default function EtiquetasUpload() {
 
   // Verificar e iniciar merge de pedidos selecionados
   const handleMergePedidos = () => {
-    // Pegar apenas pedidos pendentes selecionados (não permite mesclar já gerados)
-    const selectedPending = physicalSales.filter(s =>
-      s.selected && s.etiquetaStatus === 'pending' && !s.mergedInto
+    // Pegar todos os pedidos selecionados que NÃO são já mesclados
+    const selectedItems = physicalSales.filter(s =>
+      s.selected && !s.mergedInto && !s.isMerged
     );
 
-    if (selectedPending.length < 2) return;
-
-    // Verificar se todos os emails são iguais
-    const emails = [...new Set(selectedPending.map(s => s.email.toLowerCase().trim()))];
-
-    if (emails.length > 1) {
-      // Emails diferentes - mostrar aviso
-      setPendingMerge(selectedPending);
-      setShowMergeWarningModal(true);
-    } else {
-      // Emails iguais - mesclar direto
-      executeMerge(selectedPending);
+    // Verificar se há itens já mesclados selecionados
+    const selectedMerged = physicalSales.filter(s => s.selected && s.isMerged);
+    if (selectedMerged.length > 0) {
+      alert('Não é possível mesclar pedidos que já foram mesclados.\n\nDesfaça a mesclagem primeiro se quiser reorganizar os pedidos.');
+      return;
     }
+
+    if (selectedItems.length < 2) return;
+
+    // Validar: mesmo email, nome E endereço para poder mesclar
+    const normalizeStr = (s: string) => s.toLowerCase().trim();
+    const normalizeAddress = (sale: PhysicalSale) =>
+      `${normalizeStr(sale.address)}|${normalizeStr(sale.number || '')}|${normalizeStr(sale.zip || '')}`;
+
+    const emails = [...new Set(selectedItems.map(s => normalizeStr(s.email)))];
+    const names = [...new Set(selectedItems.map(s => normalizeStr(s.name)))];
+    const addresses = [...new Set(selectedItems.map(s => normalizeAddress(s)))];
+
+    // Verificar todas as condições
+    const sameEmail = emails.length === 1;
+    const sameName = names.length === 1;
+    const sameAddress = addresses.length === 1;
+
+    if (!sameEmail || !sameName || !sameAddress) {
+      // Dados diferentes - mostrar erro com detalhes
+      const errors: string[] = [];
+      if (!sameEmail) errors.push('E-mails diferentes');
+      if (!sameName) errors.push('Nomes diferentes');
+      if (!sameAddress) errors.push('Endereços diferentes');
+
+      alert(`Não é possível mesclar estes pedidos:\n\n${errors.join('\n')}\n\nPara mesclar, os pedidos devem ter o mesmo e-mail, nome e endereço.`);
+      return;
+    }
+
+    // Verificar se há mistura de status (gerado + pendente)
+    const hasGenerated = selectedItems.some(s => s.etiquetaStatus === 'generated' || s.etiquetaStatus === 'partial');
+    const hasPending = selectedItems.some(s => s.etiquetaStatus === 'pending');
+
+    if (hasGenerated && hasPending) {
+      // Status misto - perguntar ao usuário o que fazer
+      setPendingMerge(selectedItems);
+      setShowMergeStatusModal(true);
+      return;
+    }
+
+    // Status uniforme - pode mesclar direto
+    executeMerge(selectedItems, hasGenerated ? 'use_existing' : 'generate_new');
   };
 
   // Executar o merge de pedidos
-  const executeMerge = (pedidosToMerge: PhysicalSale[]) => {
+  const executeMerge = async (pedidosToMerge: PhysicalSale[], statusChoice: 'use_existing' | 'generate_new' = 'generate_new') => {
     if (pedidosToMerge.length < 2) return;
 
     // Usar o primeiro pedido como base para dados do destinatário
     const baseSale = pedidosToMerge[0];
 
-    // Criar ID único para o pedido mesclado
-    const mergedId = `MERGED_${Date.now()}`;
+    // Função helper para pegar o primeiro valor não-vazio de uma lista
+    const getFirstNonEmpty = (values: (string | undefined)[]): string => {
+      return values.find(v => v && v.trim() !== '') || '';
+    };
+
+    // Combinar dados: pegar o melhor (primeiro não-vazio) de cada campo
+    const combinedPhone = getFirstNonEmpty(pedidosToMerge.map(s => s.phone));
+    const combinedDocument = getFirstNonEmpty(pedidosToMerge.map(s => s.document));
+    const combinedComplement = getFirstNonEmpty(pedidosToMerge.map(s => s.complement));
+
+    // Usar a data mais recente entre os pedidos mesclados
+    const mostRecentDate = pedidosToMerge.reduce((latest, sale) => {
+      const saleTime = parseDate(sale.saleDate);
+      const latestTime = parseDate(latest);
+      return saleTime > latestTime ? sale.saleDate : latest;
+    }, pedidosToMerge[0].saleDate);
+
+    // Extrair dados originais completos para restauração futura (incluindo status de etiqueta)
+    const originalSalesData: OriginalSaleData[] = pedidosToMerge.map(s => ({
+      transaction: s.transaction,
+      productName: s.productName,
+      productCode: s.productCode,
+      totalPrice: s.totalPrice,
+      document: s.document,
+      saleDate: s.saleDate,
+      // Campos adicionais para restauração completa
+      phone: s.phone,
+      country: s.country,
+      servicoEct: s.servicoEct,
+      // Campos de etiqueta para restauração do status original
+      etiquetaStatus: s.etiquetaStatus,
+      etiqueta: s.etiqueta,
+      etiquetas: s.etiquetas,
+      enviosTotal: s.enviosTotal,
+      enviosRealizados: s.enviosRealizados,
+    }));
 
     // Combinar informações
     const allTransactions = pedidosToMerge.map(s => s.transaction);
     const allProducts = pedidosToMerge.map(s => s.productName);
     const allProductCodes = pedidosToMerge.map(s => s.productCode);
 
-    // Criar novo pedido mesclado
+    // Salvar merge no Firebase para auto-merge futuro (retorna o ID consistente)
+    const mergedId = await saveMergeToFirebase(originalSalesData);
+    if (!mergedId) {
+      console.error('Erro ao salvar merge no Firebase');
+      return;
+    }
+
+    // Determinar status e etiqueta do merge baseado na escolha do usuário
+    let mergedStatus: 'pending' | 'generated' | 'partial' = 'pending';
+    let mergedEtiqueta: string | undefined;
+    let mergedEtiquetas: string[] | undefined;
+    let mergedEnviosRealizados = 0;
+
+    if (statusChoice === 'use_existing') {
+      // Usar etiqueta existente: pegar do primeiro item gerado
+      const generatedItem = pedidosToMerge.find(s => s.etiquetaStatus === 'generated' || s.etiquetaStatus === 'partial');
+      if (generatedItem) {
+        mergedStatus = generatedItem.etiquetaStatus as 'generated' | 'partial';
+        mergedEtiqueta = generatedItem.etiqueta;
+        mergedEtiquetas = generatedItem.etiquetas;
+        mergedEnviosRealizados = generatedItem.enviosRealizados;
+      }
+    }
+    // Se 'generate_new', mantém status 'pending' (valores padrão)
+
+    // Criar novo pedido mesclado com dados combinados (melhor info de cada campo)
     const mergedSale: PhysicalSale = {
       ...baseSale,
       transaction: mergedId,
-      productName: allProducts.join(' + '),
+      productName: allProducts.join('\n'), // Produtos separados por quebra de linha
       productCode: allProductCodes.join(','),
+      // Usar dados combinados (primeiro não-vazio encontrado)
+      phone: combinedPhone,
+      document: combinedDocument,
+      complement: combinedComplement,
+      // Usar a data mais recente para ordenação correta
+      saleDate: mostRecentDate,
       selected: false,
       isMerged: true,
       mergedTransactions: allTransactions,
       mergedProductNames: allProducts,
+      mergedOriginalSales: originalSalesData,
       enviosTotal: 1,
-      enviosRealizados: 0,
-      etiquetaStatus: 'pending',
+      enviosRealizados: mergedEnviosRealizados,
+      etiquetaStatus: mergedStatus,
+      etiqueta: mergedEtiqueta,
+      etiquetas: mergedEtiquetas,
     };
 
-    // Atualizar lista: marcar originais como mesclados e adicionar o novo
+    // Atualizar lista: remover originais e adicionar o mesclado
     setPhysicalSales(prev => {
-      const updated = prev.map(s => {
-        if (allTransactions.includes(s.transaction)) {
-          return { ...s, mergedInto: mergedId, selected: false };
-        }
-        return s;
-      });
-      return [...updated, mergedSale];
+      // Filtrar os originais (removê-los da lista)
+      const withoutOriginals = prev.filter(s => !allTransactions.includes(s.transaction));
+      const newList = [...withoutOriginals, mergedSale];
+      // Ordenar por data (mais recente primeiro)
+      return newList.sort((a, b) => parseDate(b.saleDate) - parseDate(a.saleDate));
     });
 
     // Limpar estados do modal
     setShowMergeWarningModal(false);
+    setShowMergeStatusModal(false);
     setPendingMerge([]);
   };
 
@@ -1151,17 +1534,77 @@ export default function EtiquetasUpload() {
   };
 
   // Desfazer merge de um pedido
-  const unmergePedido = (mergedId: string) => {
+  const unmergePedido = async (mergedId: string) => {
+    // Encontrar o pedido mesclado
+    const mergedSale = physicalSales.find(s => s.transaction === mergedId);
+    if (!mergedSale) return;
+
+    // Remover do Firebase usando o mergeId
+    await removeMergeFromFirebase(mergedId);
+
     setPhysicalSales(prev => {
-      // Restaurar pedidos originais
-      const updated = prev.map(s => {
-        if (s.mergedInto === mergedId) {
-          return { ...s, mergedInto: undefined, selected: false };
-        }
-        return s;
-      });
-      // Remover o pedido mesclado
-      return updated.filter(s => s.transaction !== mergedId);
+      const merged = prev.find(s => s.transaction === mergedId);
+      if (!merged) {
+        return prev.filter(s => s.transaction !== mergedId);
+      }
+
+      // Usar dados originais completos se disponíveis
+      if (merged.mergedOriginalSales && merged.mergedOriginalSales.length > 0) {
+        const originalSales: PhysicalSale[] = merged.mergedOriginalSales.map(original => ({
+          ...merged,
+          transaction: original.transaction,
+          productName: original.productName,
+          productCode: original.productCode,
+          totalPrice: original.totalPrice,
+          document: original.document,
+          saleDate: original.saleDate,
+          // Campos adicionais restaurados
+          phone: original.phone || merged.phone,
+          country: original.country || merged.country,
+          servicoEct: original.servicoEct || merged.servicoEct,
+          // Restaurar status original de etiqueta (se disponível)
+          etiquetaStatus: original.etiquetaStatus || 'pending',
+          etiqueta: original.etiqueta,
+          etiquetas: original.etiquetas,
+          enviosTotal: original.enviosTotal ?? 1,
+          enviosRealizados: original.enviosRealizados ?? 0,
+          // Limpar campos de merge
+          isMerged: false,
+          mergedTransactions: undefined,
+          mergedProductNames: undefined,
+          mergedOriginalSales: undefined,
+          selected: false,
+        }));
+        const newList = [...prev.filter(s => s.transaction !== mergedId), ...originalSales];
+        // Ordenar por data (mais recente primeiro)
+        return newList.sort((a, b) => parseDate(b.saleDate) - parseDate(a.saleDate));
+      }
+
+      // Fallback: usar dados parciais se não tiver originalSales
+      if (merged.mergedTransactions && merged.mergedProductNames) {
+        const originalSales: PhysicalSale[] = merged.mergedTransactions.map((transId, index) => ({
+          ...merged,
+          transaction: transId,
+          productName: merged.mergedProductNames?.[index] || merged.productName,
+          productCode: merged.productCode.split(',')[index] || merged.productCode,
+          // Fallback: status pendente quando não tem dados originais
+          etiquetaStatus: 'pending' as const,
+          etiqueta: undefined,
+          etiquetas: undefined,
+          enviosTotal: 1,
+          enviosRealizados: 0,
+          isMerged: false,
+          mergedTransactions: undefined,
+          mergedProductNames: undefined,
+          mergedOriginalSales: undefined,
+          selected: false,
+        }));
+        const newList = [...prev.filter(s => s.transaction !== mergedId), ...originalSales];
+        // Ordenar por data (mais recente primeiro)
+        return newList.sort((a, b) => parseDate(b.saleDate) - parseDate(a.saleDate));
+      }
+
+      return prev.filter(s => s.transaction !== mergedId);
     });
   };
 
@@ -1180,9 +1623,12 @@ export default function EtiquetasUpload() {
   const alreadyGeneratedCount = physicalSales.filter(s => s.etiquetaStatus === 'generated' && !s.mergedInto).length;
   const selectedGeneratedCount = physicalSales.filter(s => s.selected && s.etiquetaStatus === 'generated' && !s.mergedInto).length;
   const partialCount = physicalSales.filter(s => s.etiquetaStatus === 'partial' && !s.mergedInto).length;
-  // Conta pendentes selecionados que podem ser mesclados (não pode mesclar já gerados ou parciais)
-  const selectedPendingForMerge = physicalSales.filter(s =>
-    s.selected && s.etiquetaStatus === 'pending' && !s.mergedInto
+  // Conta selecionados que podem ser mesclados (pendentes, gerados ou parciais - não já mesclados)
+  const selectedForMerge = physicalSales.filter(s =>
+    s.selected &&
+    !s.mergedInto &&
+    !s.isMerged &&
+    (s.etiquetaStatus === 'pending' || s.etiquetaStatus === 'generated' || s.etiquetaStatus === 'partial')
   ).length;
 
   // Exportar CSV para importação de rastreio na Hotmart
@@ -1252,6 +1698,7 @@ export default function EtiquetasUpload() {
           codigo: sale.etiqueta || '',
           transactionId: sale.transaction,
           produto: sale.productName,
+          dataPedido: sale.saleDate, // Data do pedido
           destinatario: {
             nome: sale.name,
             telefone: sale.phone,
@@ -1264,6 +1711,17 @@ export default function EtiquetasUpload() {
             uf: sale.state,
             cep: sale.zip?.replace(/\D/g, '') || '',
           },
+          // Info de envio parcial
+          envioNumero: sale.enviosRealizados || 1,
+          enviosTotal: sale.enviosTotal || 1,
+          isEnvioParcial: (sale.enviosTotal || 1) > 1,
+          observacaoEnvio: '',
+          // Info de merge
+          ...(sale.isMerged && {
+            isMerged: true,
+            mergedTransactionIds: sale.mergedTransactions || [],
+            produtos: sale.mergedProductNames || [],
+          }),
         }));
 
         const webhookPayload = {
@@ -1280,6 +1738,10 @@ export default function EtiquetasUpload() {
         console.log('- N8N ativado: true');
         console.log('- Etiquetas já geradas (admin recebe):', etiquetasParaWebhook.length);
         console.log('- Cliente NÃO recebe (etiquetas já foram geradas antes)');
+        // Debug: mostrar UF de cada etiqueta
+        etiquetasParaWebhook.forEach((e, i) => {
+          console.log(`[DEBUG] Item ${i}: state="${selectedSales[i]?.state}", uf="${e.destinatario.uf}", cidade="${e.destinatario.cidade}"`);
+        });
         console.log('======================================');
 
         await fetch('/api/webhook/etiquetas', {
@@ -1327,7 +1789,12 @@ export default function EtiquetasUpload() {
   };
 
   // Função que realmente executa a geração (chamada após confirmação)
-  const executeGeneration = async (toGenerate: PhysicalSale[]) => {
+  const executeGeneration = async (
+    toGenerate: PhysicalSale[],
+    observacoes: Record<string, string> = {},
+    ordem: 'antigos' | 'novos' = 'antigos',
+    obsGeral: string = ''
+  ) => {
     // Etiquetas já geradas que estão selecionadas (para incluir no PDF)
     const alreadyGenerated = physicalSales.filter(s => s.selected && s.etiquetaStatus === 'generated' && s.etiqueta);
 
@@ -1338,22 +1805,26 @@ export default function EtiquetasUpload() {
       codigo: string;
       transactionId: string;
       produto: string;
+      dataPedido?: string;
       destinatario: { nome: string; telefone: string; email: string; logradouro: string; numero: string; complemento: string; bairro: string; cidade: string; uf: string; cep: string };
+      envioNumero?: number;
+      enviosTotal?: number;
+      isEnvioParcial?: boolean;
+      observacaoEnvio?: string;
+      isMerged?: boolean;
+      mergedTransactionIds?: string[];
+      produtos?: string[];
     }> = [];
 
     // Todas as etiquetas para o PDF (novas + já geradas selecionadas)
     const todasEtiquetasParaPdf: string[] = alreadyGenerated.map(s => s.etiqueta as string);
 
     // Etiquetas já geradas (para webhook do admin, sem enviar para cliente)
-    const etiquetasJaGeradas: Array<{
-      codigo: string;
-      transactionId: string;
-      produto: string;
-      destinatario: { nome: string; telefone: string; email: string; logradouro: string; numero: string; complemento: string; bairro: string; cidade: string; uf: string; cep: string };
-    }> = alreadyGenerated.map(sale => ({
+    const etiquetasJaGeradas = alreadyGenerated.map(sale => ({
       codigo: sale.etiqueta || '',
       transactionId: sale.transaction,
       produto: sale.productName,
+      dataPedido: sale.saleDate, // Data do pedido
       destinatario: {
         nome: sale.name,
         telefone: sale.phone,
@@ -1366,6 +1837,18 @@ export default function EtiquetasUpload() {
         uf: sale.state,
         cep: sale.zip?.replace(/\D/g, '') || '',
       },
+      // Info de envio parcial
+      envioNumero: sale.enviosRealizados || 1,
+      enviosTotal: sale.enviosTotal || 1,
+      isEnvioParcial: (sale.enviosTotal || 1) > 1,
+      // Observação do pedido (já geradas usam observação salva ou vazio)
+      observacaoEnvio: observacoes[sale.transaction] || '',
+      // Info de merge
+      ...(sale.isMerged && {
+        isMerged: true,
+        mergedTransactionIds: sale.mergedTransactions || [],
+        produtos: sale.mergedProductNames || [],
+      }),
     }));
 
     if (toGenerate.length > 0) {
@@ -1388,6 +1871,7 @@ export default function EtiquetasUpload() {
             body: JSON.stringify({
               transactionId: sale.transaction,
               servicoEct: selectedServicoEct, // Código do serviço ECT selecionado globalmente
+              useTestCredentials, // Flag para usar credenciais de teste
               destinatario: {
                 nome: sale.name,
                 documento: sale.document,
@@ -1421,7 +1905,8 @@ export default function EtiquetasUpload() {
               envioNumero,
               sale.enviosTotal,
               sale.mergedTransactions, // transactionIds originais se for mesclado
-              sale.mergedProductNames  // nomes dos produtos se for mesclado
+              sale.mergedProductNames, // nomes dos produtos se for mesclado
+              observacoes[sale.transaction] // observação do envio parcial
             );
 
             // Guardar para o webhook (cliente vai receber)
@@ -1429,6 +1914,7 @@ export default function EtiquetasUpload() {
               codigo: result.etiqueta,
               transactionId: sale.transaction,
               produto: sale.productName,
+              dataPedido: sale.saleDate, // Data do pedido
               destinatario: {
                 nome: sale.name,
                 telefone: sale.phone,
@@ -1441,6 +1927,12 @@ export default function EtiquetasUpload() {
                 uf: sale.state,
                 cep: sale.zip?.replace(/\D/g, '') || '',
               },
+              // Info de envio parcial
+              envioNumero: novoEnviosRealizados,
+              enviosTotal: sale.enviosTotal,
+              isEnvioParcial: sale.enviosTotal > 1,
+              // Observação do pedido (sempre envia, mesmo vazio)
+              observacaoEnvio: observacoes[sale.transaction] || '',
               // Adicionar info de merge para o webhook
               ...(sale.isMerged && {
                 isMerged: true,
@@ -1515,6 +2007,11 @@ export default function EtiquetasUpload() {
             clientPhoneOverride: clientPhoneOverride || undefined,
             // Só envia para cliente real se todas as condições forem atendidas
             sendClientNotification: enviarParaClienteReal || (sendClientNotification && !!clientPhoneOverride),
+            // Opções de envio
+            ordemPrioridade: ordem,
+            observacaoGeral: obsGeral || undefined,
+            // Flag de teste para URL do PDF
+            useTestCredentials: useTestCredentials,
           },
         };
 
@@ -1594,7 +2091,7 @@ export default function EtiquetasUpload() {
 
     // Se só tem etiquetas já geradas, executa direto (só vai reimprimir)
     if (toGenerate.length === 0) {
-      executeGeneration([]);
+      executeGeneration([], envioObservacoes, ordemPrioridade, observacaoGeral);
       return;
     }
 
@@ -1614,8 +2111,11 @@ export default function EtiquetasUpload() {
       setShowGenerationConfirmModal(true);
       // pendingGeneration já está setado, será usado quando confirmar
     } else {
-      executeGeneration(pendingGeneration);
+      executeGeneration(pendingGeneration, envioObservacoes, ordemPrioridade, observacaoGeral);
       setPendingGeneration([]);
+      setEnvioObservacoes({});
+      setOrdemPrioridade('antigos');
+      setObservacaoGeral('');
     }
   };
 
@@ -1632,8 +2132,11 @@ export default function EtiquetasUpload() {
       setShowGenerationConfirmModal(false);
       setConfirmEtiquetasText('');
       setConfirmEnviarText('');
-      executeGeneration(pendingGeneration);
+      executeGeneration(pendingGeneration, envioObservacoes, ordemPrioridade, observacaoGeral);
       setPendingGeneration([]);
+      setEnvioObservacoes({});
+      setOrdemPrioridade('antigos');
+      setObservacaoGeral('');
     }
   };
 
@@ -2527,7 +3030,7 @@ export default function EtiquetasUpload() {
               }`}
               style={{ fontFamily: 'var(--font-inter)' }}
             >
-              Todas ({physicalSales.length})
+              Todas ({physicalSales.filter(s => !s.mergedInto).length})
             </button>
             <button
               onClick={() => handleFilterChange('pending')}
@@ -2541,7 +3044,7 @@ export default function EtiquetasUpload() {
               }`}
               style={{ fontFamily: 'var(--font-inter)' }}
             >
-              Pendentes ({physicalSales.filter(s => s.etiquetaStatus === 'pending').length})
+              Pendentes ({physicalSales.filter(s => !s.mergedInto && s.etiquetaStatus === 'pending').length})
             </button>
             <button
               onClick={() => handleFilterChange('partial')}
@@ -2555,7 +3058,7 @@ export default function EtiquetasUpload() {
               }`}
               style={{ fontFamily: 'var(--font-inter)' }}
             >
-              Parciais ({physicalSales.filter(s => s.etiquetaStatus === 'partial').length})
+              Parciais ({physicalSales.filter(s => !s.mergedInto && s.etiquetaStatus === 'partial').length})
             </button>
             <button
               onClick={() => handleFilterChange('generated')}
@@ -2569,7 +3072,21 @@ export default function EtiquetasUpload() {
               }`}
               style={{ fontFamily: 'var(--font-inter)' }}
             >
-              Completas ({physicalSales.filter(s => s.etiquetaStatus === 'generated').length})
+              Completas ({physicalSales.filter(s => !s.mergedInto && s.etiquetaStatus === 'generated').length})
+            </button>
+            <button
+              onClick={() => handleFilterChange('merge')}
+              disabled={hasSearchText}
+              className={`px-2 py-1 rounded text-xs font-medium transition ${
+                statusFilter === 'merge' && !hasSearchText
+                  ? 'bg-white text-purple-700 shadow-sm'
+                  : hasSearchText
+                    ? 'text-slate-400 cursor-not-allowed'
+                    : 'text-slate-600 hover:text-slate-900'
+              }`}
+              style={{ fontFamily: 'var(--font-inter)' }}
+            >
+              Mesclar ({mergeFilterCount})
             </button>
             {hasSearchText && (
               <span
@@ -2655,8 +3172,8 @@ export default function EtiquetasUpload() {
                   ))}
                 </select>
               </div>
-              {/* Botão Mesclar - aparece quando 2+ pendentes selecionados */}
-              {selectedPendingForMerge >= 2 && (
+              {/* Botão Mesclar - aparece quando 2+ itens selecionados (pendentes/gerados) */}
+              {selectedForMerge >= 2 && (
                 <button
                   onClick={handleMergePedidos}
                   disabled={isGenerating}
@@ -2676,7 +3193,7 @@ export default function EtiquetasUpload() {
                     <path d="M3 12h.01" />
                     <path d="M3 18h.01" />
                   </svg>
-                  Mesclar ({selectedPendingForMerge})
+                  Mesclar ({selectedForMerge})
                 </button>
               )}
               <button
@@ -2760,6 +3277,18 @@ export default function EtiquetasUpload() {
                     textTransform: 'uppercase',
                   }}
                 >
+                  Mesclado
+                </th>
+                <th
+                  className="px-4 py-3 text-left"
+                  style={{
+                    fontFamily: 'var(--font-inter)',
+                    fontWeight: 600,
+                    fontSize: '0.75rem',
+                    color: '#64748B',
+                    textTransform: 'uppercase',
+                  }}
+                >
                   Envios
                 </th>
                 <th
@@ -2816,11 +3345,17 @@ export default function EtiquetasUpload() {
               {filteredSales.map((sale) => (
                 <tr
                   key={sale.transaction}
-                  className={`border-b border-slate-100 hover:bg-slate-50 transition ${
-                    sale.etiquetaStatus === 'generated' ? 'bg-green-50/50' : ''
-                  } ${sale.etiquetaStatus === 'partial' ? 'bg-yellow-50/50' : ''
-                  } ${sale.isMerged ? 'bg-purple-50/50' : ''
-                  } ${sale.etiquetaStatus === 'error' ? 'bg-red-50/50' : ''}`}
+                  className={`border-b transition ${
+                    sale.isMerged
+                      ? 'border-purple-200 bg-purple-50/70 hover:bg-purple-100/70'
+                      : sale.etiquetaStatus === 'generated'
+                        ? 'border-slate-100 bg-green-50/50 hover:bg-green-50'
+                        : sale.etiquetaStatus === 'partial'
+                          ? 'border-slate-100 bg-yellow-50/50 hover:bg-yellow-50'
+                          : sale.etiquetaStatus === 'error'
+                            ? 'border-slate-100 bg-red-50/50 hover:bg-red-50'
+                            : 'border-slate-100 hover:bg-slate-50'
+                  }`}
                 >
                   <td className="px-4 py-3">
                     <input
@@ -2828,34 +3363,20 @@ export default function EtiquetasUpload() {
                       checked={sale.selected}
                       onChange={() => toggleSelect(sale.transaction)}
                       disabled={isGenerating}
-                      className="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-500 disabled:opacity-50"
+                      className={`w-4 h-4 rounded disabled:opacity-50 ${
+                        sale.isMerged
+                          ? 'border-purple-400 text-purple-600 focus:ring-purple-500'
+                          : 'border-slate-300 text-orange-500 focus:ring-orange-500'
+                      }`}
                     />
                   </td>
                   <td className="px-4 py-3">
-                    {/* Badge de Mesclado */}
-                    {sale.isMerged && (
-                      <div className="flex items-center gap-1 mb-1">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                          Mesclado ({sale.mergedTransactions?.length || 0})
-                        </span>
-                        <button
-                          onClick={() => unmergePedido(sale.transaction)}
-                          className="text-purple-500 hover:text-purple-700 text-xs"
-                          title="Desfazer mesclagem"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    )}
                     {sale.etiquetaStatus === 'generated' ? (
                       <div className="flex items-center gap-2">
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
                           Completo {sale.enviosRealizados}/{sale.enviosTotal}
                         </span>
-                        <span
-                          className="text-xs text-green-600 font-mono"
-                          title={sale.etiquetas?.join(', ') || sale.etiqueta}
-                        >
+                        <span className="text-xs text-green-600 font-mono" title={sale.etiquetas?.join(', ') || sale.etiqueta}>
                           {sale.etiqueta}
                         </span>
                       </div>
@@ -2864,10 +3385,7 @@ export default function EtiquetasUpload() {
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
                           Parcial {sale.enviosRealizados}/{sale.enviosTotal}
                         </span>
-                        <span
-                          className="text-xs text-yellow-600 font-mono"
-                          title={sale.etiquetas?.join(', ') || sale.etiqueta}
-                        >
+                        <span className="text-xs text-yellow-600 font-mono" title={sale.etiquetas?.join(', ') || sale.etiqueta}>
                           {sale.etiqueta}
                         </span>
                       </div>
@@ -2875,10 +3393,34 @@ export default function EtiquetasUpload() {
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
                         Erro
                       </span>
+                    ) : sale.isMerged ? (
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-200 text-purple-700">
+                        Pendente
+                      </span>
                     ) : (
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
                         Pendente
                       </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {/* Coluna Mesclado */}
+                    {sale.isMerged && sale.mergedTransactions ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setMergeDetailsSale(sale)}
+                          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 transition shadow-sm"
+                          title="Ver detalhes do merge"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M16 16v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4" />
+                            <path d="M12 12h8a2 2 0 002-2V4a2 2 0 00-2-2h-6a2 2 0 00-2 2v8z" />
+                          </svg>
+                          {sale.mergedTransactions.length} pedidos
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">-</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -2937,31 +3479,60 @@ export default function EtiquetasUpload() {
                         {sale.email}
                       </p>
                       {sale.phone && (
-                        <p
+                        <a
+                          href={`https://wa.me/${sale.phone.replace(/\D/g, '').replace(/^0+/, '').replace(/^(?!55)/, '55')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
                           style={{
                             fontFamily: 'var(--font-inter)',
                             fontSize: '0.75rem',
-                            color: '#64748B',
+                            color: '#25D366',
+                            textDecoration: 'none',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
                           }}
+                          title="Abrir WhatsApp"
                         >
-                          {sale.phone}
-                        </p>
+                          <span>📱</span> {sale.phone}
+                        </a>
                       )}
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <p
-                      style={{
-                        fontFamily: 'var(--font-inter)',
-                        fontSize: '0.8125rem',
-                        color: '#314158',
-                        maxWidth: '200px',
-                      }}
-                      className="truncate"
-                      title={sale.productName}
-                    >
-                      {sale.productName}
-                    </p>
+                    {/* Coluna Produto - mostra com quebra de linha se mesclado */}
+                    {sale.isMerged && sale.mergedProductNames ? (
+                      <div style={{ maxWidth: '200px' }}>
+                        {sale.mergedProductNames.map((product, idx) => (
+                          <p
+                            key={idx}
+                            style={{
+                              fontFamily: 'var(--font-inter)',
+                              fontSize: '0.8125rem',
+                              color: '#314158',
+                              margin: idx > 0 ? '0.25rem 0 0 0' : 0,
+                            }}
+                            className="truncate"
+                            title={product}
+                          >
+                            {product}
+                          </p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.8125rem',
+                          color: '#314158',
+                          maxWidth: '200px',
+                        }}
+                        className="truncate"
+                        title={sale.productName}
+                      >
+                        {sale.productName}
+                      </p>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div style={{ maxWidth: '250px' }}>
@@ -3030,7 +3601,9 @@ export default function EtiquetasUpload() {
                 ? 'Nenhum envio parcial'
                 : statusFilter === 'generated'
                   ? 'Nenhum envio completo ainda'
-                  : 'Nenhuma venda de produto físico encontrada no CSV'
+                  : statusFilter === 'merge'
+                    ? 'Nenhum item mesclado ou candidato a mesclar'
+                    : 'Nenhuma venda de produto físico encontrada no CSV'
             }
           </p>
         </div>
@@ -3050,16 +3623,24 @@ export default function EtiquetasUpload() {
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 9999,
+            padding: '1rem',
           }}
-          onClick={() => setShowServiceConfirmModal(false)}
+          onClick={() => {
+            setShowServiceConfirmModal(false);
+            setEnvioObservacoes({});
+            setOrdemPrioridade('antigos');
+            setObservacaoGeral('');
+          }}
         >
           <div
             style={{
               backgroundColor: '#FFF',
               borderRadius: '1rem',
               padding: '1.5rem',
-              maxWidth: '450px',
-              width: '90%',
+              maxWidth: '550px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
               boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
             }}
             onClick={(e) => e.stopPropagation()}
@@ -3135,9 +3716,132 @@ export default function EtiquetasUpload() {
               </p>
             )}
 
+            {/* Opções de Envio */}
+            <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem' }}>
+              <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#166534' }}>
+                ⚙️ OPÇÕES DE ENVIO
+              </p>
+
+              {/* Ordem de prioridade */}
+              <div style={{ marginTop: '0.75rem' }}>
+                <p style={{ margin: '0 0 0.5rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#166534' }}>
+                  Ordem de prioridade:
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setOrdemPrioridade('antigos')}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      color: ordemPrioridade === 'antigos' ? '#FFF' : '#166534',
+                      backgroundColor: ordemPrioridade === 'antigos' ? '#16A34A' : '#DCFCE7',
+                      border: ordemPrioridade === 'antigos' ? '1px solid #16A34A' : '1px solid #86EFAC',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    📅 Mais antigos primeiro
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrdemPrioridade('novos')}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      color: ordemPrioridade === 'novos' ? '#FFF' : '#166534',
+                      backgroundColor: ordemPrioridade === 'novos' ? '#16A34A' : '#DCFCE7',
+                      border: ordemPrioridade === 'novos' ? '1px solid #16A34A' : '1px solid #86EFAC',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🆕 Mais novos primeiro
+                  </button>
+                </div>
+              </div>
+
+              {/* Observação geral */}
+              <div style={{ marginTop: '0.75rem' }}>
+                <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#166534' }}>
+                  Observação geral (opcional):
+                </p>
+                <textarea
+                  value={observacaoGeral}
+                  onChange={(e) => setObservacaoGeral(e.target.value)}
+                  placeholder="Ex: Lote de sexta-feira, prioridade alta..."
+                  rows={2}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem 0.75rem',
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: '0.75rem',
+                    color: '#1E293B',
+                    backgroundColor: '#FFF',
+                    border: '1px solid #86EFAC',
+                    borderRadius: '0.375rem',
+                    boxSizing: 'border-box',
+                    resize: 'none',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Observações por Pedido */}
+            <div style={{ backgroundColor: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem' }}>
+              <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#92400E' }}>
+                📝 OBSERVAÇÕES POR PEDIDO
+              </p>
+              <p style={{ margin: '0.25rem 0 0.75rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#92400E' }}>
+                Informe o que vai em cada pedido (aparece na mensagem do admin)
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '200px', overflowY: 'auto' }}>
+                {pendingGeneration.map(sale => (
+                  <div key={sale.transaction} style={{ backgroundColor: '#FFFBEB', borderRadius: '0.375rem', padding: '0.5rem' }}>
+                    <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#78350F', fontWeight: 500 }}>
+                      {sale.name}
+                      {sale.enviosTotal > 1 && (
+                        <span style={{ marginLeft: '0.5rem', color: '#B45309' }}>
+                          (Envio {sale.enviosRealizados + 1}/{sale.enviosTotal})
+                        </span>
+                      )}
+                    </p>
+                    <input
+                      type="text"
+                      value={envioObservacoes[sale.transaction] || ''}
+                      onChange={(e) => setEnvioObservacoes(prev => ({ ...prev, [sale.transaction]: e.target.value }))}
+                      placeholder={sale.enviosTotal > 1 ? "O que vai neste envio?" : "Observação (opcional)"}
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        fontFamily: 'var(--font-inter)',
+                        fontSize: '0.75rem',
+                        color: '#1E293B',
+                        backgroundColor: '#FFF',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '0.375rem',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div style={{ display: 'flex', gap: '0.75rem' }}>
               <button
-                onClick={() => setShowServiceConfirmModal(false)}
+                onClick={() => {
+                  setShowServiceConfirmModal(false);
+                  setEnvioObservacoes({});
+                  setOrdemPrioridade('antigos');
+                  setObservacaoGeral('');
+                }}
                 style={{
                   flex: 1,
                   padding: '0.75rem',
@@ -3299,6 +4003,445 @@ export default function EtiquetasUpload() {
                 }}
               >
                 Mesclar Mesmo Assim
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Status Misto ao Mesclar (gerado + pendente) */}
+      {showMergeStatusModal && pendingMerge.length > 0 && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => {
+            setShowMergeStatusModal(false);
+            setPendingMerge([]);
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '500px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                margin: '0 0 0.5rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '1.125rem',
+                fontWeight: 600,
+                color: '#1E293B',
+              }}
+            >
+              Mesclar pedidos com status diferentes
+            </h3>
+
+            <p
+              style={{
+                margin: '0 0 1rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                color: '#64748B',
+              }}
+            >
+              Você está mesclando pedidos onde alguns já têm etiqueta gerada e outros ainda estão pendentes.
+            </p>
+
+            {/* Lista de pedidos */}
+            <div
+              style={{
+                backgroundColor: '#F8FAFC',
+                border: '1px solid #E2E8F0',
+                borderRadius: '0.5rem',
+                padding: '0.75rem',
+                marginBottom: '1rem',
+                maxHeight: '150px',
+                overflow: 'auto',
+              }}
+            >
+              {pendingMerge.map((sale, idx) => (
+                <div key={idx} style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: idx < pendingMerge.length - 1 ? '0.5rem' : 0,
+                  fontSize: '0.8rem',
+                  fontFamily: 'var(--font-inter)',
+                }}>
+                  <span style={{
+                    padding: '0.125rem 0.375rem',
+                    borderRadius: '0.25rem',
+                    fontSize: '0.7rem',
+                    fontWeight: 500,
+                    backgroundColor: sale.etiquetaStatus === 'generated' ? '#DCFCE7' :
+                                    sale.etiquetaStatus === 'partial' ? '#FEF3C7' : '#F1F5F9',
+                    color: sale.etiquetaStatus === 'generated' ? '#166534' :
+                           sale.etiquetaStatus === 'partial' ? '#92400E' : '#64748B',
+                  }}>
+                    {sale.etiquetaStatus === 'generated' ? 'Gerado' :
+                     sale.etiquetaStatus === 'partial' ? 'Parcial' : 'Pendente'}
+                  </span>
+                  <span style={{ color: '#1E293B' }}>{sale.productName}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Opções */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem' }}>
+              {/* Opção 1: Usar etiqueta existente */}
+              <button
+                onClick={() => {
+                  setShowMergeStatusModal(false);
+                  executeMerge(pendingMerge, 'use_existing');
+                  setPendingMerge([]);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.875rem 1rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  textAlign: 'left',
+                  color: '#1E293B',
+                  backgroundColor: '#F0FDF4',
+                  border: '2px solid #22C55E',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>
+                  Usar etiqueta já gerada
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#64748B' }}>
+                  Os pedidos pendentes serão associados à etiqueta existente.
+                  Todos os produtos irão no mesmo envio.
+                </div>
+              </button>
+
+              {/* Opção 2: Criar novo pedido pendente */}
+              <button
+                onClick={() => {
+                  setShowMergeStatusModal(false);
+                  executeMerge(pendingMerge, 'generate_new');
+                  setPendingMerge([]);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.875rem 1rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  textAlign: 'left',
+                  color: '#1E293B',
+                  backgroundColor: '#FFF7ED',
+                  border: '2px solid #F97316',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>
+                  Criar novo pedido mesclado
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#64748B' }}>
+                  A etiqueta existente será desconsiderada. Você poderá gerar
+                  uma nova etiqueta para todos os produtos juntos.
+                </div>
+              </button>
+            </div>
+
+            {/* Botão Cancelar */}
+            <button
+              onClick={() => {
+                setShowMergeStatusModal(false);
+                setPendingMerge([]);
+              }}
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                fontWeight: 500,
+                color: '#64748B',
+                backgroundColor: '#F1F5F9',
+                border: 'none',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Detalhes do Merge */}
+      {mergeDetailsSale && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setMergeDetailsSale(null)}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '600px',
+              width: '90%',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  backgroundColor: '#9333EA',
+                  color: 'white',
+                  borderRadius: '0.5rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M16 16v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4" />
+                    <path d="M12 12h8a2 2 0 002-2V4a2 2 0 00-2-2h-6a2 2 0 00-2 2v8z" />
+                  </svg>
+                  {mergeDetailsSale.mergedTransactions?.length || 0} Pedidos Mesclados
+                </span>
+              </div>
+              <button
+                onClick={() => setMergeDetailsSale(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  color: '#64748B',
+                  cursor: 'pointer',
+                  padding: '0.25rem',
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Destinatário Info */}
+            <div style={{
+              backgroundColor: '#F5F3FF',
+              border: '1px solid #DDD6FE',
+              borderRadius: '0.75rem',
+              padding: '1rem',
+              marginBottom: '1rem',
+            }}>
+              <h4 style={{
+                margin: '0 0 0.75rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                color: '#7C3AED',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}>
+                Destinatário
+              </h4>
+              <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.9375rem', fontWeight: 600, color: '#1E1B4B' }}>
+                {mergeDetailsSale.name}
+              </p>
+              <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.8125rem', color: '#6B7280' }}>
+                {mergeDetailsSale.email}
+              </p>
+              {mergeDetailsSale.phone && (
+                <p style={{ margin: '0 0 0.5rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.8125rem', color: '#6B7280' }}>
+                  {mergeDetailsSale.phone}
+                </p>
+              )}
+              <p style={{ margin: '0', fontFamily: 'var(--font-inter)', fontSize: '0.8125rem', color: '#6B7280' }}>
+                {mergeDetailsSale.address}, {mergeDetailsSale.number}
+                {mergeDetailsSale.complement && ` - ${mergeDetailsSale.complement}`}
+                <br />
+                {mergeDetailsSale.neighborhood} - {mergeDetailsSale.city}/{mergeDetailsSale.state} - CEP: {mergeDetailsSale.zip}
+              </p>
+            </div>
+
+            {/* Pedidos Originais */}
+            <h4 style={{
+              margin: '0 0 0.75rem 0',
+              fontFamily: 'var(--font-inter)',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              color: '#7C3AED',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}>
+              Pedidos Originais
+            </h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {mergeDetailsSale.mergedOriginalSales?.map((original, idx) => (
+                <div
+                  key={original.transaction}
+                  style={{
+                    backgroundColor: '#FAFAFA',
+                    border: '1px solid #E5E7EB',
+                    borderRadius: '0.75rem',
+                    padding: '1rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '0.25rem 0.5rem',
+                      backgroundColor: '#9333EA',
+                      color: 'white',
+                      borderRadius: '0.375rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                    }}>
+                      Pedido #{idx + 1}
+                    </span>
+                    <span style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.75rem',
+                      color: '#6B7280',
+                      backgroundColor: '#F3F4F6',
+                      padding: '0.25rem 0.5rem',
+                      borderRadius: '0.25rem',
+                    }}>
+                      {original.transaction}
+                    </span>
+                  </div>
+                  <p style={{
+                    margin: '0 0 0.25rem 0',
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: '0.875rem',
+                    fontWeight: 500,
+                    color: '#1F2937',
+                  }}>
+                    {original.productName}
+                  </p>
+                  <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#6B7280' }}>
+                      <strong>Valor:</strong> {original.totalPrice}
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#6B7280' }}>
+                      <strong>Data:</strong> {original.saleDate?.split(' ')[0] || '-'}
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#6B7280' }}>
+                      <strong>Documento:</strong> {original.document || '-'}
+                    </span>
+                  </div>
+                </div>
+              )) || mergeDetailsSale.mergedTransactions?.map((id, idx) => (
+                <div
+                  key={id}
+                  style={{
+                    backgroundColor: '#FAFAFA',
+                    border: '1px solid #E5E7EB',
+                    borderRadius: '0.75rem',
+                    padding: '1rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '0.25rem 0.5rem',
+                      backgroundColor: '#9333EA',
+                      color: 'white',
+                      borderRadius: '0.375rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                    }}>
+                      #{idx + 1}
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8125rem', color: '#374151' }}>
+                      {id}
+                    </span>
+                  </div>
+                  <p style={{ margin: '0.5rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.875rem', color: '#1F2937' }}>
+                    {mergeDetailsSale.mergedProductNames?.[idx] || '-'}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Botões */}
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={() => {
+                  unmergePedido(mergeDetailsSale.transaction);
+                  setMergeDetailsSale(null);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#DC2626',
+                  backgroundColor: '#FEE2E2',
+                  border: '1px solid #FECACA',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+                Desfazer Mesclagem
+              </button>
+              <button
+                onClick={() => setMergeDetailsSale(null)}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#FFF',
+                  backgroundColor: '#9333EA',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: 'pointer',
+                }}
+              >
+                Fechar
               </button>
             </div>
           </div>
@@ -4374,6 +5517,9 @@ export default function EtiquetasUpload() {
             setShowGenerationConfirmModal(false);
             setConfirmEtiquetasText('');
             setConfirmEnviarText('');
+            setEnvioObservacoes({});
+            setOrdemPrioridade('antigos');
+            setObservacaoGeral('');
           }}
         >
           <div
@@ -4381,7 +5527,7 @@ export default function EtiquetasUpload() {
               backgroundColor: '#FFF',
               borderRadius: '1rem',
               padding: '1.5rem',
-              maxWidth: '450px',
+              maxWidth: '500px',
               width: '90%',
               boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
             }}
@@ -4467,6 +5613,121 @@ export default function EtiquetasUpload() {
               </div>
             )}
 
+            {/* Opções de Envio */}
+            <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem' }}>
+              <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#166534' }}>
+                ⚙️ OPÇÕES DE ENVIO
+              </p>
+
+              {/* Ordem de prioridade */}
+              <div style={{ marginTop: '0.75rem' }}>
+                <p style={{ margin: '0 0 0.5rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#166534' }}>
+                  Ordem de prioridade:
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setOrdemPrioridade('antigos')}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      color: ordemPrioridade === 'antigos' ? '#FFF' : '#166534',
+                      backgroundColor: ordemPrioridade === 'antigos' ? '#16A34A' : '#DCFCE7',
+                      border: ordemPrioridade === 'antigos' ? '1px solid #16A34A' : '1px solid #86EFAC',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    📅 Mais antigos primeiro
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrdemPrioridade('novos')}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem',
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      fontWeight: 500,
+                      color: ordemPrioridade === 'novos' ? '#FFF' : '#166534',
+                      backgroundColor: ordemPrioridade === 'novos' ? '#16A34A' : '#DCFCE7',
+                      border: ordemPrioridade === 'novos' ? '1px solid #16A34A' : '1px solid #86EFAC',
+                      borderRadius: '0.375rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🆕 Mais novos primeiro
+                  </button>
+                </div>
+              </div>
+
+              {/* Observação geral */}
+              <div style={{ marginTop: '0.75rem' }}>
+                <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#166534' }}>
+                  Observação geral (opcional):
+                </p>
+                <textarea
+                  value={observacaoGeral}
+                  onChange={(e) => setObservacaoGeral(e.target.value)}
+                  placeholder="Ex: Lote de sexta-feira, prioridade alta..."
+                  rows={2}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem 0.75rem',
+                    fontFamily: 'var(--font-inter)',
+                    fontSize: '0.75rem',
+                    color: '#1E293B',
+                    backgroundColor: '#FFF',
+                    border: '1px solid #86EFAC',
+                    borderRadius: '0.375rem',
+                    boxSizing: 'border-box',
+                    resize: 'none',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Seção de Envios Parciais */}
+            {pendingGeneration.filter(s => s.enviosTotal > 1).length > 0 && (
+              <div style={{ backgroundColor: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '0.5rem', padding: '1rem', marginBottom: '1rem' }}>
+                <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#92400E' }}>
+                  📦 ENVIOS PARCIAIS
+                </p>
+                <p style={{ margin: '0.25rem 0 0.75rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#92400E' }}>
+                  Informe o que vai neste envio (ex: &quot;camiseta&quot;, &quot;2 unidades&quot;)
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {pendingGeneration.filter(s => s.enviosTotal > 1).map(sale => (
+                    <div key={sale.transaction} style={{ backgroundColor: '#FFFBEB', borderRadius: '0.375rem', padding: '0.5rem' }}>
+                      <p style={{ margin: '0 0 0.25rem 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#78350F', fontWeight: 500 }}>
+                        {sale.name} - Envio {sale.enviosRealizados + 1}/{sale.enviosTotal}
+                      </p>
+                      <input
+                        type="text"
+                        value={envioObservacoes[sale.transaction] || ''}
+                        onChange={(e) => setEnvioObservacoes(prev => ({ ...prev, [sale.transaction]: e.target.value }))}
+                        placeholder="O que vai neste envio?"
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem 0.75rem',
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.75rem',
+                          color: '#1E293B',
+                          backgroundColor: '#FFF',
+                          border: '1px solid #E2E8F0',
+                          borderRadius: '0.375rem',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Resumo */}
             <div style={{ backgroundColor: '#F8FAFC', borderRadius: '0.5rem', padding: '0.75rem', marginBottom: '1rem' }}>
               <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
@@ -4482,6 +5743,9 @@ export default function EtiquetasUpload() {
                   setShowGenerationConfirmModal(false);
                   setConfirmEtiquetasText('');
                   setConfirmEnviarText('');
+                  setEnvioObservacoes({});
+                  setOrdemPrioridade('antigos');
+                  setObservacaoGeral('');
                 }}
                 style={{
                   flex: 1,

@@ -1,15 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const VIPP_CONFIG = {
+// Credenciais de PRODUÇÃO
+const VIPP_CONFIG_PROD = {
   url: process.env.VIPP_API_URL || 'http://vpsrv.visualset.com.br/api/v1/middleware/PostarObjeto',
   usuario: process.env.VIPP_USUARIO || '',
   token: process.env.VIPP_SENHA || '',
   idPerfil: process.env.VIPP_ID_PERFIL || '',
-  // Contrato ECT (produção)
   servicoEct: process.env.VIPP_SERVICO_ECT || '',
   nrContrato: process.env.VIPP_NR_CONTRATO || '',
   codAdministrativo: process.env.VIPP_COD_ADMINISTRATIVO || '',
   nrCartao: process.env.VIPP_NR_CARTAO || '',
+};
+
+// Credenciais de TESTE (homologação)
+const VIPP_CONFIG_TEST = {
+  url: process.env.VIPP_API_URL || 'http://vpsrv.visualset.com.br/api/v1/middleware/PostarObjeto',
+  usuario: process.env.VIPP_USUARIO_TESTE || 'onbiws',
+  token: process.env.VIPP_SENHA_TESTE || '112233',
+  idPerfil: process.env.VIPP_ID_PERFIL_TESTE || '9363',
+  servicoEct: process.env.VIPP_SERVICO_ECT || '',
+  nrContrato: '', // Teste não usa contrato
+  codAdministrativo: '',
+  nrCartao: '',
 };
 
 interface DestinatarioData {
@@ -29,13 +41,14 @@ interface DestinatarioData {
 interface PostarObjetoRequest {
   transactionId: string;
   servicoEct?: string; // Código do serviço ECT (opcional, usa env se não fornecido)
+  useTestCredentials?: boolean; // Se true, usa credenciais de teste
   destinatario: DestinatarioData;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: PostarObjetoRequest = await request.json();
-    const { transactionId, servicoEct, destinatario } = body;
+    const { transactionId, servicoEct, useTestCredentials, destinatario } = body;
 
     if (!transactionId || !destinatario) {
       return NextResponse.json(
@@ -43,6 +56,10 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Selecionar credenciais baseado no flag
+    const VIPP_CONFIG = useTestCredentials ? VIPP_CONFIG_TEST : VIPP_CONFIG_PROD;
+    console.log(`[VIPP] Usando credenciais de ${useTestCredentials ? 'TESTE' : 'PRODUÇÃO'}`);
 
     // Usar servicoEct do request ou fallback para env
     const servicoEctFinal = servicoEct || VIPP_CONFIG.servicoEct;

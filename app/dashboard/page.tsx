@@ -435,19 +435,20 @@ export default function DashboardPage() {
         </svg>
       ),
     },
-    {
-      id: 'carrinhos',
-      label: 'Carrinhos Abandonados',
-      icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="9" cy="21" r="1" />
-          <circle cx="20" cy="21" r="1" />
-          <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
-          <line x1="12" y1="9" x2="12" y2="15" />
-          <line x1="9" y1="12" x2="15" y2="12" />
-        </svg>
-      ),
-    },
+    // Carrinhos Abandonados - temporariamente oculto (integração via N8N + Datacrazy)
+    // {
+    //   id: 'carrinhos',
+    //   label: 'Carrinhos Abandonados',
+    //   icon: (
+    //     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    //       <circle cx="9" cy="21" r="1" />
+    //       <circle cx="20" cy="21" r="1" />
+    //       <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+    //       <line x1="12" y1="9" x2="12" y2="15" />
+    //       <line x1="9" y1="12" x2="15" y2="12" />
+    //     </svg>
+    //   ),
+    // },
   ];
 
   const menuItems: MenuItem[] = isUserAdmin

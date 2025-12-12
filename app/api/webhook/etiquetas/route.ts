@@ -3,17 +3,34 @@ import { NextRequest, NextResponse } from 'next/server';
 // URL do webhook N8N - configure no .env
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || '';
 
-// Configuração ViPP para gerar URL do PDF
-const VIPP_PRINT_CONFIG = {
+// Configuração ViPP para gerar URL do PDF - PRODUÇÃO
+const VIPP_PRINT_CONFIG_PROD = {
   url: `${process.env.VIPP_URL || 'https://vipp.visualset.com.br/vipp/remoto'}/ImpressaoRemota.php`,
   usuario: process.env.VIPP_USUARIO || '',
   senha: process.env.VIPP_SENHA || '',
+};
+
+// Configuração ViPP para gerar URL do PDF - TESTE
+const VIPP_PRINT_CONFIG_TEST = {
+  url: `${process.env.VIPP_URL || 'https://vipp.visualset.com.br/vipp/remoto'}/ImpressaoRemota.php`,
+  usuario: process.env.VIPP_USUARIO_TESTE || 'onbiws',
+  senha: process.env.VIPP_SENHA_TESTE || '112233',
+};
+
+// Configuração Evolution API para envio de WhatsApp
+const EVOLUTION_CONFIG = {
+  baseUrl: process.env.EVOLUTION_API_URL || '',
+  apiKey: process.env.EVOLUTION_API_KEY || '',
+  instanceName: process.env.EVOLUTION_INSTANCE_NAME || '',
+  messageDelay: parseInt(process.env.EVOLUTION_MESSAGE_DELAY || '5000'),
+  useEvolution: process.env.WHATSAPP_USE_EVOLUTION === 'true',
 };
 
 interface EtiquetaData {
   codigo: string;
   transactionId: string;
   produto: string;
+  dataPedido?: string;
   destinatario: {
     nome: string;
     telefone: string;
@@ -26,6 +43,11 @@ interface EtiquetaData {
     uf: string;
     cep: string;
   };
+  // Campos para envio parcial
+  envioNumero?: number;
+  enviosTotal?: number;
+  isEnvioParcial?: boolean;
+  observacaoEnvio?: string;
   // Campos para pedidos mesclados
   isMerged?: boolean;
   mergedTransactionIds?: string[];
@@ -36,6 +58,9 @@ interface WebhookConfig {
   adminPhone: string; // Telefone do admin (obrigatório)
   clientPhoneOverride?: string; // Se preenchido, substitui o número do cliente
   sendClientNotification: boolean; // Se true, envia WhatsApp para clientes
+  ordemPrioridade?: 'antigos' | 'novos'; // Ordem de prioridade dos envios
+  observacaoGeral?: string; // Observação geral do lote
+  useTestCredentials?: boolean; // Se true, usa credenciais de teste VIPP
 }
 
 interface WebhookRequest {
@@ -81,7 +106,11 @@ function formatarTelefone(telefone: string): string | null {
 }
 
 // Gera URL direta para download do PDF da ViPP (uma ou várias etiquetas)
+// Variável global para armazenar se está em modo teste (setada no POST)
+let currentUseTestCredentials = false;
+
 function gerarUrlPdf(codigos: string | string[]): string {
+  const VIPP_PRINT_CONFIG = currentUseTestCredentials ? VIPP_PRINT_CONFIG_TEST : VIPP_PRINT_CONFIG_PROD;
   const lista = Array.isArray(codigos) ? codigos.join(',') : codigos;
   const params = new URLSearchParams({
     Usr: VIPP_PRINT_CONFIG.usuario,
@@ -90,7 +119,163 @@ function gerarUrlPdf(codigos: string | string[]): string {
     Saida: '20',
     Lista: lista,
   });
+  console.log(`[PDF] Usando credenciais de ${currentUseTestCredentials ? 'TESTE' : 'PRODUÇÃO'} para URL do PDF`);
   return `${VIPP_PRINT_CONFIG.url}?${params.toString()}`;
+}
+
+// Interface para dados processados da etiqueta (com campos extras)
+interface EtiquetaProcessada {
+  codigo: string;
+  pdfUrl: string;
+  transactionId: string;
+  produto: string;
+  dataPedido: string;
+  clienteNome: string;
+  clienteTelefone: string | null;
+  clienteEmail: string;
+  clienteLogradouro: string;
+  clienteNumero: string;
+  clienteComplemento: string;
+  clienteBairro: string;
+  clienteCidade: string;
+  clienteUf: string;
+  clienteCep: string;
+  envioNumero: number;
+  enviosTotal: number;
+  isEnvioParcial: boolean;
+  observacaoEnvio: string;
+  isMerged?: boolean;
+  mergedTransactionIds?: string[];
+  produtos?: string[];
+}
+
+// Gera mensagem personalizada para o cliente
+function gerarMensagemCliente(e: EtiquetaProcessada): string {
+  // Montar endereço completo
+  const enderecoParts = [
+    e.clienteLogradouro,
+    e.clienteNumero,
+    e.clienteComplemento,
+  ].filter(Boolean).join(', ');
+  const enderecoCompleto = `${enderecoParts} — ${e.clienteCidade}, ${e.clienteUf} CEP ${e.clienteCep}`;
+
+  let msg = `${e.clienteNome}, seu pedido realizado na Branding.lab foi atualizado.\n\n`;
+  msg += `📦 Código de rastreio dos Correios: ${e.codigo}\n\n`;
+
+  // Se for pedido mesclado, mostrar os IDs das transações
+  if (e.isMerged && e.mergedTransactionIds && e.mergedTransactionIds.length > 1) {
+    msg += `🔗 Este envio contém ${e.mergedTransactionIds.length} pedidos:\n`;
+    e.mergedTransactionIds.forEach(tid => {
+      msg += `• ${tid}\n`;
+    });
+    msg += `\n`;
+  }
+
+  // Se for envio parcial, personalizar mensagem
+  if (e.isEnvioParcial && e.enviosTotal > 1) {
+    if (e.envioNumero === 1) {
+      // Primeiro envio de uma série
+      msg += `📋 *Atenção:* Este é o envio *${e.envioNumero} de ${e.enviosTotal}*.\n`;
+      msg += `Os demais itens do seu pedido serão enviados em breve.\n\n`;
+    } else if (e.envioNumero < e.enviosTotal) {
+      // Envio intermediário
+      msg += `📋 *Atenção:* Este é o envio *${e.envioNumero} de ${e.enviosTotal}*.\n`;
+      msg += `Você já recebeu ${e.envioNumero - 1} envio(s) anterior(es) e ainda há mais ${e.enviosTotal - e.envioNumero} a caminho.\n\n`;
+    } else {
+      // Último envio
+      msg += `📋 *Atenção:* Este é o *último envio* (${e.envioNumero} de ${e.enviosTotal}).\n`;
+      msg += `Os envios anteriores já foram despachados.\n\n`;
+    }
+
+    // Se tiver observação do que vai neste envio
+    if (e.observacaoEnvio) {
+      msg += `📝 *Neste envio:* ${e.observacaoEnvio}\n\n`;
+    }
+  }
+
+  msg += `📍 Endereço de envio informado no pedido: ${enderecoCompleto}\n\n`;
+  msg += `🔗 Você pode acompanhar o status pelo site oficial dos Correios: https://rastreamento.correios.com.br/`;
+
+  return msg;
+}
+
+// Função de delay
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Função para enviar mensagem via Evolution API
+async function enviarMensagemEvolution(telefone: string, mensagem: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Remove barra final da URL base se houver
+    const baseUrl = EVOLUTION_CONFIG.baseUrl.replace(/\/$/, '');
+    const url = `${baseUrl}/message/sendText/${EVOLUTION_CONFIG.instanceName}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': EVOLUTION_CONFIG.apiKey,
+      },
+      body: JSON.stringify({
+        number: telefone,
+        text: mensagem,
+        linkPreview: false,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Evolution] Erro ao enviar para ${telefone}:`, errorText);
+      return { success: false, error: errorText };
+    }
+
+    const result = await response.json();
+    console.log(`[Evolution] Mensagem enviada para ${telefone}`);
+    return { success: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+    console.error(`[Evolution] Exceção ao enviar para ${telefone}:`, errorMessage);
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Função para enviar WhatsApp aos clientes com delay
+async function enviarWhatsAppClientes(etiquetas: Array<{
+  clienteTelefone: string | null;
+  clienteNome: string;
+  transactionId: string;
+  mensagemCliente: string;
+}>): Promise<{ enviados: number; erros: number }> {
+  let enviados = 0;
+  let erros = 0;
+
+  const etiquetasComTelefone = etiquetas.filter(e => e.clienteTelefone && e.clienteTelefone.trim() !== '');
+
+  console.log(`[WhatsApp Cliente] Iniciando envio de ${etiquetasComTelefone.length} mensagem(s) com delay de ${EVOLUTION_CONFIG.messageDelay}ms`);
+
+  for (let i = 0; i < etiquetasComTelefone.length; i++) {
+    const e = etiquetasComTelefone[i];
+
+    // Aplicar delay entre mensagens (exceto na primeira)
+    if (i > 0) {
+      console.log(`[WhatsApp Cliente] Aguardando ${EVOLUTION_CONFIG.messageDelay}ms...`);
+      await delay(EVOLUTION_CONFIG.messageDelay);
+    }
+
+    console.log(`[WhatsApp Cliente] Enviando ${i + 1}/${etiquetasComTelefone.length} para ${e.clienteNome} (${e.clienteTelefone})`);
+
+    const resultado = await enviarMensagemEvolution(e.clienteTelefone!, e.mensagemCliente);
+
+    if (resultado.success) {
+      enviados++;
+    } else {
+      erros++;
+    }
+  }
+
+  console.log(`[WhatsApp Cliente] Concluído: ${enviados} enviado(s), ${erros} erro(s)`);
+  return { enviados, erros };
 }
 
 export async function POST(request: NextRequest) {
@@ -98,8 +283,19 @@ export async function POST(request: NextRequest) {
     const body: WebhookRequest = await request.json();
     const { etiquetas, etiquetasAdmin, config } = body;
 
+    // Setar credenciais de teste/produção para URL do PDF
+    currentUseTestCredentials = config.useTestCredentials || false;
+    console.log(`[VIPP] Modo: ${currentUseTestCredentials ? 'TESTE' : 'PRODUÇÃO'}`);
+
     console.log('\n========== WEBHOOK ETIQUETAS - RECEBIDO ==========');
-    console.log('Body recebido:', JSON.stringify(body, null, 2));
+    // Log específico para debug de campos UF
+    const allEtiquetas = [...(etiquetas || []), ...(etiquetasAdmin || [])];
+    if (allEtiquetas.length > 0) {
+      console.log('[DEBUG] Campos de endereço recebidos:');
+      allEtiquetas.forEach((e, i) => {
+        console.log(`  [${i}] Cidade="${e.destinatario?.cidade}" | UF="${e.destinatario?.uf}" | CEP="${e.destinatario?.cep}"`);
+      });
+    }
     console.log('==================================================\n');
 
     // Validar config
@@ -147,11 +343,12 @@ export async function POST(request: NextRequest) {
         clienteTelefone = formatarTelefone(e.destinatario.telefone);
       }
 
-      return {
+      const etiquetaProcessada: EtiquetaProcessada = {
         codigo: e.codigo,
         pdfUrl: gerarUrlPdf(e.codigo),
         transactionId: e.transactionId,
         produto: e.produto,
+        dataPedido: e.dataPedido || '',
         clienteNome: e.destinatario.nome,
         clienteTelefone: clienteTelefone,
         clienteEmail: e.destinatario.email,
@@ -162,6 +359,21 @@ export async function POST(request: NextRequest) {
         clienteCidade: e.destinatario.cidade,
         clienteUf: e.destinatario.uf,
         clienteCep: e.destinatario.cep,
+        // Campos de envio parcial
+        envioNumero: e.envioNumero || 1,
+        enviosTotal: e.enviosTotal || 1,
+        isEnvioParcial: e.isEnvioParcial || false,
+        observacaoEnvio: e.observacaoEnvio || '',
+        // Campos de merge
+        isMerged: e.isMerged || false,
+        mergedTransactionIds: e.mergedTransactionIds || [],
+        produtos: e.produtos || [],
+      };
+
+      return {
+        ...etiquetaProcessada,
+        // Mensagem pronta para enviar ao cliente via WhatsApp
+        mensagemCliente: gerarMensagemCliente(etiquetaProcessada),
       };
     });
 
@@ -171,6 +383,7 @@ export async function POST(request: NextRequest) {
       pdfUrl: gerarUrlPdf(e.codigo),
       transactionId: e.transactionId,
       produto: e.produto,
+      dataPedido: e.dataPedido || '',
       clienteNome: e.destinatario.nome,
       clienteEmail: e.destinatario.email,
       clienteLogradouro: e.destinatario.logradouro,
@@ -181,6 +394,11 @@ export async function POST(request: NextRequest) {
       clienteUf: e.destinatario.uf,
       clienteCep: e.destinatario.cep,
       isNova: etiquetasNovas.some(n => n.codigo === e.codigo),
+      // Campos de envio parcial
+      envioNumero: e.envioNumero || 1,
+      enviosTotal: e.enviosTotal || 1,
+      isEnvioParcial: e.isEnvioParcial || false,
+      observacaoEnvio: e.observacaoEnvio || '',
       // Campos de merge
       isMerged: e.isMerged || false,
       mergedTransactionIds: e.mergedTransactionIds || [],
@@ -188,8 +406,9 @@ export async function POST(request: NextRequest) {
     }));
 
     // Filtrar etiquetas NOVAS que têm telefone válido (para envio ao cliente)
-    const etiquetasNovasComTelefone = etiquetasNovasProcessadas.filter(e => e.clienteTelefone !== null);
-    const etiquetasNovasSemTelefone = etiquetasNovasProcessadas.filter(e => e.clienteTelefone === null);
+    // Verifica se não é null E não é string vazia
+    const etiquetasNovasComTelefone = etiquetasNovasProcessadas.filter(e => e.clienteTelefone && e.clienteTelefone.trim() !== '');
+    const etiquetasNovasSemTelefone = etiquetasNovasProcessadas.filter(e => !e.clienteTelefone || e.clienteTelefone.trim() === '');
 
     if (etiquetasNovasSemTelefone.length > 0) {
       console.log(`${etiquetasNovasSemTelefone.length} etiqueta(s) NOVA(s) sem telefone válido:`,
@@ -201,9 +420,16 @@ export async function POST(request: NextRequest) {
 
     // Gerar mensagem formatada para o admin
     const etiquetasAntigas = todasEtiquetasProcessadas.filter(e => !e.isNova);
+    const ordemTexto = config.ordemPrioridade === 'novos' ? '🆕 Mais novos primeiro' : '📅 Mais antigos primeiro';
 
     let mensagemAdmin = `📦 *Etiquetas Geradas*\n\n`;
     mensagemAdmin += `Total: ${todasEtiquetas.length} etiqueta(s)\n`;
+    mensagemAdmin += `Prioridade: ${ordemTexto}\n`;
+
+    // Observação geral se houver
+    if (config.observacaoGeral) {
+      mensagemAdmin += `\n📝 *Observação:*\n_${config.observacaoGeral}_\n`;
+    }
 
     if (etiquetasNovas.length > 0) {
       mensagemAdmin += `\n✨ *${etiquetasNovas.length} NOVA(S):*\n`;
@@ -211,7 +437,19 @@ export async function POST(request: NextRequest) {
         mensagemAdmin += `\n🏷️ ${e.codigo}\n`;
         mensagemAdmin += `👤 ${e.clienteNome}\n`;
         mensagemAdmin += `📍 ${e.clienteCidade}/${e.clienteUf}\n`;
+        // Mostrar data do pedido
+        if (e.dataPedido) {
+          mensagemAdmin += `📅 ${e.dataPedido}\n`;
+        }
         mensagemAdmin += `📦 ${e.produto}\n`;
+        // Mostrar info de envio parcial
+        if (e.isEnvioParcial && e.enviosTotal > 1) {
+          mensagemAdmin += `📋 *Envio ${e.envioNumero}/${e.enviosTotal}* (parcial)\n`;
+        }
+        // Mostrar observação do pedido se houver
+        if (e.observacaoEnvio) {
+          mensagemAdmin += `💬 _${e.observacaoEnvio}_\n`;
+        }
         // Adicionar info de merge se aplicável
         if (e.isMerged && e.mergedTransactionIds && e.mergedTransactionIds.length > 1) {
           mensagemAdmin += `🔗 *MESCLADO (${e.mergedTransactionIds.length} pedidos):*\n`;
@@ -228,7 +466,19 @@ export async function POST(request: NextRequest) {
         mensagemAdmin += `\n🏷️ ${e.codigo}\n`;
         mensagemAdmin += `👤 ${e.clienteNome}\n`;
         mensagemAdmin += `📍 ${e.clienteCidade}/${e.clienteUf}\n`;
+        // Mostrar data do pedido
+        if (e.dataPedido) {
+          mensagemAdmin += `📅 ${e.dataPedido}\n`;
+        }
         mensagemAdmin += `📦 ${e.produto}\n`;
+        // Mostrar info de envio parcial
+        if (e.isEnvioParcial && e.enviosTotal > 1) {
+          mensagemAdmin += `📋 *Envio ${e.envioNumero}/${e.enviosTotal}* (parcial)\n`;
+        }
+        // Mostrar observação do pedido se houver
+        if (e.observacaoEnvio) {
+          mensagemAdmin += `💬 _${e.observacaoEnvio}_\n`;
+        }
         // Adicionar info de merge se aplicável
         if (e.isMerged && e.mergedTransactionIds && e.mergedTransactionIds.length > 1) {
           mensagemAdmin += `🔗 *MESCLADO (${e.mergedTransactionIds.length} pedidos):*\n`;
@@ -250,11 +500,19 @@ export async function POST(request: NextRequest) {
       console.log(`⚠️ sendClientNotification=false - ${etiquetasNovasComTelefone.length} cliente(s) NÃO receberão WhatsApp`);
     }
 
+    // Gerar nome do arquivo baseado na quantidade de etiquetas
+    const dataAtual = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const fileName = todasEtiquetas.length === 1
+      ? `${todasEtiquetasProcessadas[0]?.clienteNome || 'Etiqueta'} - ${dataAtual}`
+      : `Etiquetas - ${dataAtual}`;
+
     const webhookPayload = {
       timestamp: new Date().toISOString(),
       totalNovas: etiquetasNovas.length,
       totalAdmin: todasEtiquetas.length,
       adminPhone: adminPhoneFormatted,
+      // Nome do arquivo para caption e download
+      fileName: fileName,
       // URL do PDF consolidado (todas etiquetas em um único arquivo) - usar no admin
       pdfUrlConsolidada: pdfUrlConsolidada,
       // Mensagem formatada para o admin
@@ -263,6 +521,11 @@ export async function POST(request: NextRequest) {
       etiquetas: etiquetasParaCliente,
       // TODAS as etiquetas (admin recebe)
       todasEtiquetas: todasEtiquetasProcessadas,
+      // Opções de envio
+      opcoes: {
+        ordemPrioridade: config.ordemPrioridade || 'antigos',
+        observacaoGeral: config.observacaoGeral || '',
+      },
       // Resumo para mensagem consolidada do admin
       resumo: {
         quantidadeNovas: etiquetasNovas.length,
@@ -278,7 +541,7 @@ export async function POST(request: NextRequest) {
     console.log(JSON.stringify(webhookPayload, null, 2));
     console.log('======================================\n');
 
-    // Enviar para N8N
+    // Enviar para N8N (admin)
     if (N8N_WEBHOOK_URL) {
       console.log('Enviando para N8N:', N8N_WEBHOOK_URL);
       try {
@@ -301,9 +564,66 @@ export async function POST(request: NextRequest) {
       console.log('N8N_WEBHOOK_URL não configurado!');
     }
 
+    // Enviar WhatsApp para clientes via Evolution API (se habilitado)
+    let whatsappClienteResultado = { enviados: 0, erros: 0 };
+    if (EVOLUTION_CONFIG.useEvolution && enviarWhatsappCliente && etiquetasParaCliente.length > 0) {
+      console.log('\n========== ENVIANDO WHATSAPP CLIENTES (Evolution) ==========');
+      try {
+        whatsappClienteResultado = await enviarWhatsAppClientes(etiquetasParaCliente);
+      } catch (evolutionError) {
+        console.error('Erro ao enviar WhatsApp via Evolution:', evolutionError);
+      }
+      console.log('============================================================\n');
+    } else if (!EVOLUTION_CONFIG.useEvolution) {
+      console.log('[WhatsApp Cliente] WHATSAPP_USE_EVOLUTION=false, deixando N8N enviar');
+    } else if (!enviarWhatsappCliente) {
+      console.log('[WhatsApp Cliente] Notificação ao cliente desabilitada');
+    }
+
+    // Cadastrar etiquetas NOVAS no Google Sheets (em paralelo, não bloqueia)
+    if (etiquetasNovas.length > 0) {
+      const dataGeracao = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const etiquetasParaSheets = etiquetasNovasProcessadas.map(e => ({
+        codigo: e.codigo,
+        transactionId: e.transactionId,
+        dataPedido: e.dataPedido,
+        dataGeracao: dataGeracao,
+        produto: e.produto,
+        clienteNome: e.clienteNome,
+        clienteDocumento: '', // Não temos no processado, seria necessário passar do frontend
+        clienteTelefone: e.clienteTelefone || '',
+        clienteEmail: e.clienteEmail,
+        clienteLogradouro: e.clienteLogradouro,
+        clienteNumero: e.clienteNumero,
+        clienteComplemento: e.clienteComplemento,
+        clienteBairro: e.clienteBairro,
+        clienteCidade: e.clienteCidade,
+        clienteUf: e.clienteUf,
+        clienteCep: e.clienteCep,
+        envioNumero: e.envioNumero,
+        enviosTotal: e.enviosTotal,
+        isEnvioParcial: e.isEnvioParcial,
+        observacaoEnvio: e.observacaoEnvio,
+        isMerged: e.isMerged,
+        mergedTransactionIds: e.mergedTransactionIds,
+        produtos: e.produtos,
+        isTest: currentUseTestCredentials,
+      }));
+
+      // Fire and forget - não bloqueia a resposta
+      fetch(`${request.nextUrl.origin}/api/google-sheets/etiquetas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ etiquetas: etiquetasParaSheets }),
+      }).catch(err => console.error('[Google Sheets] Erro ao cadastrar:', err));
+
+      console.log(`[Google Sheets] Enviando ${etiquetasNovas.length} etiqueta(s) para planilha...`);
+    }
+
     return NextResponse.json({
       success: true,
       message: `Webhook disparado: ${etiquetasNovas.length} nova(s), ${todasEtiquetas.length} total para admin`,
+      whatsappCliente: whatsappClienteResultado,
       payload: webhookPayload,
     });
 
