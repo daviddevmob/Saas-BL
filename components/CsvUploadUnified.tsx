@@ -17,6 +17,7 @@ interface JobData {
   sucessos: number;
   erros: number;
   ignorados: number;
+  ultimoIndice?: number; // Para retomada em caso de travamento
   criadoEm: string;
   atualizadoEm: string;
   mensagem: string;
@@ -163,7 +164,8 @@ interface CsvUploadUnifiedProps {
 export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const [activeJob, setActiveJob] = useState<JobData | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>(PLATFORMS[0]);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]); // Múltiplos arquivos
+  const [currentFileIndex, setCurrentFileIndex] = useState(0); // Arquivo atual na fila
   const [isDragging, setIsDragging] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +173,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const [selectedDocPlatform, setSelectedDocPlatform] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelConfirmText, setCancelConfirmText] = useState('');
+  const [completedFiles, setCompletedFiles] = useState<string[]>([]); // Arquivos já processados
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Escutar jobs ativos no Firebase (tempo real)
@@ -249,23 +252,29 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile?.name.endsWith('.csv')) {
-      setFile(droppedFile);
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.csv'));
+    if (droppedFiles.length > 0) {
+      setFiles(prev => [...prev, ...droppedFiles]);
       setError(null);
     }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
+    const selectedFiles = Array.from(e.target.files || []).filter(f => f.name.endsWith('.csv'));
+    if (selectedFiles.length > 0) {
+      setFiles(prev => [...prev, ...selectedFiles]);
       setError(null);
     }
   };
 
+  const removeFile = (index: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   const startImport = async () => {
-    if (!file || isStarting || isRunning) return;
+    if (files.length === 0 || isStarting || isRunning) return;
+
+    const file = files[currentFileIndex];
 
     setIsStarting(true);
     setError(null);
@@ -273,7 +282,6 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('platform', selectedPlatform.id);
-    formData.append('delay', '1500');
 
     try {
       const response = await fetch('/api/import-csv/iniciar', {
@@ -289,7 +297,8 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           console.log('Debug:', data.debug);
         }
       } else {
-        setFile(null);
+        // Marcar arquivo como iniciado
+        setCompletedFiles(prev => [...prev, file.name]);
         // Job será detectado automaticamente pelo onSnapshot
       }
     } catch (e) {
@@ -304,6 +313,72 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const isError = activeJob?.status === 'erro';
   const isCancelled = activeJob?.status === 'cancelado';
   const progress = activeJob?.total ? Math.round((activeJob.processados / activeJob.total) * 100) : 0;
+
+  // Detectar travamento: se passou mais de 2 minutos sem atualização durante processamento
+  const [isStalled, setIsStalled] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
+
+  useEffect(() => {
+    if (isRunning && activeJob?.atualizadoEm) {
+      const checkStalled = () => {
+        const lastUpdate = new Date(activeJob.atualizadoEm).getTime();
+        const now = Date.now();
+        const stalledThreshold = 2 * 60 * 1000; // 2 minutos
+        setIsStalled(now - lastUpdate > stalledThreshold);
+      };
+
+      checkStalled();
+      const interval = setInterval(checkStalled, 10000); // Verificar a cada 10s
+      return () => clearInterval(interval);
+    } else {
+      setIsStalled(false);
+    }
+  }, [isRunning, activeJob?.atualizadoEm]);
+
+  // Função para retomar job travado
+  const resumeJob = async () => {
+    if (!activeJob || files.length === 0 || isResuming) return;
+
+    const file = files[currentFileIndex];
+    if (!file) return;
+
+    setIsResuming(true);
+    setError(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('jobId', activeJob.id);
+
+    try {
+      const response = await fetch('/api/import-csv/retomar', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        setError(data.error || 'Erro ao retomar importação');
+      } else {
+        setIsStalled(false);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao retomar importação');
+    }
+
+    setIsResuming(false);
+  };
+
+  // Avançar para próximo arquivo quando job completar
+  useEffect(() => {
+    if (isCompleted && files.length > 0 && currentFileIndex < files.length - 1) {
+      const timer = setTimeout(() => {
+        setCurrentFileIndex(prev => prev + 1);
+        clearJob();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isCompleted, files.length, currentFileIndex, clearJob]);
 
   return (
     <div
@@ -492,6 +567,56 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           >
             {activeJob.mensagem}
           </p>
+
+          {/* Aviso de Travamento */}
+          {isStalled && (
+            <div
+              style={{
+                backgroundColor: '#FEE2E2',
+                border: '1px solid #FECACA',
+                borderRadius: '0.5rem',
+                padding: '0.75rem',
+                marginBottom: '0.75rem',
+              }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span style={{ fontSize: '1.25rem' }}>⚠️</span>
+                <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#DC2626' }}>
+                  Processamento travado
+                </span>
+              </div>
+              <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#7F1D1D', margin: 0, marginBottom: '0.5rem' }}>
+                Sem atualização há mais de 2 minutos. O servidor pode ter reiniciado.
+                {activeJob.ultimoIndice !== undefined && (
+                  <> Último registro processado: <strong>{activeJob.ultimoIndice}</strong>.</>
+                )}
+              </p>
+              <button
+                onClick={resumeJob}
+                disabled={isResuming || files.length === 0}
+                style={{
+                  width: '100%',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  color: '#FFFFFF',
+                  backgroundColor: isResuming ? '#94A3B8' : '#F59E0B',
+                  border: 'none',
+                  borderRadius: '0.375rem',
+                  padding: '0.5rem 1rem',
+                  cursor: isResuming || files.length === 0 ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {isResuming ? 'Retomando...' : files.length === 0 ? 'Selecione o arquivo para retomar' : 'Retomar do último ponto'}
+              </button>
+              {files.length === 0 && (
+                <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.625rem', color: '#7F1D1D', margin: 0, marginTop: '0.25rem', textAlign: 'center' }}>
+                  Arraste o mesmo arquivo CSV novamente para retomar
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Botão Cancelar */}
           <button
@@ -804,12 +929,12 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
             style={{
-              border: `2px dashed ${isDragging ? '#22D3EE' : file ? '#22C55E' : '#E2E8F0'}`,
+              border: `2px dashed ${isDragging ? '#22D3EE' : files.length > 0 ? '#22C55E' : '#E2E8F0'}`,
               borderRadius: '1rem',
-              padding: '2.5rem 2rem',
+              padding: '1.5rem',
               textAlign: 'center',
               cursor: 'pointer',
-              backgroundColor: isDragging ? 'rgba(34, 211, 238, 0.05)' : file ? 'rgba(34, 197, 94, 0.05)' : '#F8FAFC',
+              backgroundColor: isDragging ? 'rgba(34, 211, 238, 0.05)' : files.length > 0 ? 'rgba(34, 197, 94, 0.05)' : '#F8FAFC',
               transition: 'all 0.2s ease',
             }}
           >
@@ -817,68 +942,90 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
               ref={fileInputRef}
               type="file"
               accept=".csv"
+              multiple
               onChange={handleFileSelect}
               style={{ display: 'none' }}
             />
 
-            {file ? (
-              <div className="flex flex-col items-center gap-2">
-                <div
-                  style={{
-                    width: '56px',
-                    height: '56px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '0.5rem',
-                  }}
-                >
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#22C55E" strokeWidth="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                    <polyline points="9 15 12 18 15 15" />
-                  </svg>
+            {files.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between mb-2">
+                  <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#16A34A' }}>
+                    {files.length} arquivo(s) selecionado(s)
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFiles([]);
+                      setCurrentFileIndex(0);
+                      setCompletedFiles([]);
+                    }}
+                    style={{
+                      fontFamily: 'var(--font-inter)',
+                      fontSize: '0.75rem',
+                      color: '#DC2626',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Limpar todos
+                  </button>
                 </div>
-                <p
-                  style={{
-                    fontFamily: 'var(--font-inter)',
-                    fontSize: '1rem',
-                    color: '#16A34A',
-                    margin: 0,
-                    fontWeight: 600,
-                  }}
-                >
-                  {file.name}
+                <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
+                  {files.map((file, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.5rem',
+                        backgroundColor: index === currentFileIndex ? '#F0FDF4' : '#FFFFFF',
+                        borderRadius: '0.5rem',
+                        marginBottom: '0.25rem',
+                        border: index === currentFileIndex ? '1px solid #22C55E' : '1px solid #E2E8F0',
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center gap-2">
+                        {completedFiles.includes(file.name) ? (
+                          <span style={{ color: '#16A34A' }}>✓</span>
+                        ) : index === currentFileIndex && isRunning ? (
+                          <span className="animate-spin" style={{ color: '#F59E0B' }}>⏳</span>
+                        ) : (
+                          <span style={{ color: '#94A3B8' }}>{index + 1}.</span>
+                        )}
+                        <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#334155' }}>
+                          {file.name}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.625rem', color: '#94A3B8' }}>
+                          ({(file.size / 1024).toFixed(0)} KB)
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeFile(index);
+                        }}
+                        style={{
+                          fontFamily: 'var(--font-inter)',
+                          fontSize: '0.75rem',
+                          color: '#DC2626',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: '0.25rem',
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#94A3B8', marginTop: '0.5rem' }}>
+                  Clique para adicionar mais arquivos
                 </p>
-                <p
-                  style={{
-                    fontFamily: 'var(--font-inter)',
-                    fontSize: '0.875rem',
-                    color: '#64748B',
-                    margin: 0,
-                  }}
-                >
-                  {(file.size / 1024).toFixed(1)} KB
-                </p>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setFile(null);
-                  }}
-                  style={{
-                    fontFamily: 'var(--font-inter)',
-                    fontSize: '0.75rem',
-                    color: '#DC2626',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    marginTop: '0.25rem',
-                  }}
-                >
-                  Remover arquivo
-                </button>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-3">
@@ -917,7 +1064,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                       fontWeight: 500,
                     }}
                   >
-                    Arraste o arquivo CSV aqui
+                    Arraste os arquivos CSV aqui
                   </p>
                   <p
                     style={{
@@ -927,7 +1074,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
                       margin: 0,
                     }}
                   >
-                    ou clique para selecionar
+                    ou clique para selecionar (múltiplos)
                   </p>
                 </div>
               </div>
@@ -937,22 +1084,22 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
           {/* Import Button */}
           <button
             onClick={startImport}
-            disabled={!file || isStarting}
+            disabled={files.length === 0 || isStarting}
             style={{
               width: '100%',
               fontFamily: 'var(--font-inter)',
               fontSize: '1rem',
               fontWeight: 600,
-              color: file && !isStarting ? '#FFFFFF' : '#94A3B8',
-              backgroundColor: file && !isStarting ? selectedPlatform.color : '#E2E8F0',
+              color: files.length > 0 && !isStarting ? '#FFFFFF' : '#94A3B8',
+              backgroundColor: files.length > 0 && !isStarting ? selectedPlatform.color : '#E2E8F0',
               border: 'none',
               borderRadius: '0.75rem',
               padding: '1rem',
-              cursor: file && !isStarting ? 'pointer' : 'not-allowed',
+              cursor: files.length > 0 && !isStarting ? 'pointer' : 'not-allowed',
               transition: 'all 0.2s',
             }}
           >
-            {isStarting ? 'Iniciando...' : 'Iniciar Importação'}
+            {isStarting ? 'Iniciando...' : files.length > 1 ? `Iniciar Importação (${files.length} arquivos)` : 'Iniciar Importação'}
           </button>
         </>
       )}
