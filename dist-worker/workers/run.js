@@ -4,6 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 // workers/run.ts
+const dotenv_1 = __importDefault(require("dotenv"));
+// Aponta para .env.local, que é o arquivo que você usa na VPS
+dotenv_1.default.config({ path: '.env.local' });
 const queue_1 = require("../lib/queue");
 const csvProcessor_1 = __importDefault(require("./csvProcessor"));
 console.log('Iniciando o CSV Import Worker...');

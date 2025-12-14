@@ -1,4 +1,8 @@
 // workers/run.ts
+import dotenv from 'dotenv';
+// Aponta para .env.local, que é o arquivo que você usa na VPS
+dotenv.config({ path: '.env.local' }); 
+
 import { createCsvImportWorker } from '../lib/queue';
 import processor from './csvProcessor';
 
