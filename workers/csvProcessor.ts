@@ -158,11 +158,11 @@ const processor = async (job: Job) => {
       processados: increment(1),
       erros: increment(1),
       atualizadoEm: new Date().toISOString(),
-      errosDetalhes: { 
-        [job.id as string]: { // usa o id do job como chave
-            email: row.email, 
-            name: row.name, 
-            error: errorMsg.substring(0, 500)
+      errosDetalhes: {
+        [job.id as string]: {
+          email: safeString(row.email) || 'não informado', // Garante que não seja undefined
+          name: safeString(row.name) || 'não informado',   // Garante que não seja undefined
+          error: errorMsg.substring(0, 500)
         }
       }
     });
