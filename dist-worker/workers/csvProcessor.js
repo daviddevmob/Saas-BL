@@ -125,7 +125,7 @@ const processor = async (job) => {
             processados: (0, firestore_1.increment)(1),
             [fieldToIncrement]: (0, firestore_1.increment)(1),
             atualizadoEm: new Date().toISOString(),
-            ultimaMensagem: `[${result.status}] ${result.email} - ${result.message}`,
+            ultimaMensagem: `[${result.status}] ${safeString(result.email) || 'N/A'} - ${result.message}`,
         });
         return result;
     }
@@ -137,12 +137,11 @@ const processor = async (job) => {
             processados: (0, firestore_1.increment)(1),
             erros: (0, firestore_1.increment)(1),
             atualizadoEm: new Date().toISOString(),
-            errosDetalhes: {
-                [job.id]: {
-                    email: safeString(row.email) || 'não informado', // Garante que não seja undefined
-                    name: safeString(row.name) || 'não informado', // Garante que não seja undefined
-                    error: errorMsg.substring(0, 500)
-                }
+            // Usar notação de ponto para atualizar um campo dentro de um mapa
+            [`errosDetalhes.${job.id}`]: {
+                email: safeString(row.email) || 'não informado',
+                name: safeString(row.name) || 'não informado',
+                error: errorMsg.substring(0, 500)
             }
         });
         // Lança o erro novamente para que o BullMQ possa registrar a falha e tentar novamente se configurado

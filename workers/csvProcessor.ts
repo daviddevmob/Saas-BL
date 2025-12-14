@@ -144,7 +144,7 @@ const processor = async (job: Job) => {
       processados: increment(1),
       [fieldToIncrement]: increment(1),
       atualizadoEm: new Date().toISOString(),
-      ultimaMensagem: `[${result.status}] ${result.email} - ${result.message}`,
+      ultimaMensagem: `[${result.status}] ${safeString(result.email) || 'N/A'} - ${result.message}`,
     });
 
     return result;
@@ -158,12 +158,11 @@ const processor = async (job: Job) => {
       processados: increment(1),
       erros: increment(1),
       atualizadoEm: new Date().toISOString(),
-      errosDetalhes: {
-        [job.id as string]: {
-          email: safeString(row.email) || 'não informado', // Garante que não seja undefined
-          name: safeString(row.name) || 'não informado',   // Garante que não seja undefined
-          error: errorMsg.substring(0, 500)
-        }
+      // Usar notação de ponto para atualizar um campo dentro de um mapa
+      [`errosDetalhes.${job.id}`]: {
+        email: safeString(row.email) || 'não informado',
+        name: safeString(row.name) || 'não informado',
+        error: errorMsg.substring(0, 500)
       }
     });
 
