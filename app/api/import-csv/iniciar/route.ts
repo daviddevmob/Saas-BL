@@ -241,11 +241,12 @@ async function processarEmBackground(
 
   console.log(`[IMPORT-CSV] Job ${jobId} iniciando do índice ${startIndex}/${totalRows}`);
 
-  // Atualizar Firebase com throttling - salva índice para retomada
+  // Atualizar Firebase apenas quando o percentual mudar (para notificar o usuário)
   const atualizarFirebase = async (forcar = false) => {
     const percentualAtual = Math.floor((processados / totalRows) * 100);
 
-    if (!forcar && processados - ultimaAtualizacaoFirebase < FIREBASE_UPDATE_INTERVAL && percentualAtual === ultimoPercentual) {
+    // Só atualiza se o percentual mudou ou se for forçado
+    if (!forcar && percentualAtual === ultimoPercentual) {
       return;
     }
 
@@ -484,24 +485,91 @@ function parseCSV(text: string): Record<string, string>[] {
   return result.data;
 }
 
+// Interface para mapeamento customizado (vindo do frontend)
+interface CustomMapping {
+  email: string;
+  name: string;
+  phone?: string;
+  taxId?: string;
+  product?: string;
+  transactionId: string;
+  total?: string;
+  status: string;
+  statusFilter: string;
+  zip?: string;
+  address?: string;
+  number?: string;
+  complement?: string;
+  neighborhood?: string;
+  city?: string;
+  state?: string;
+}
+
+// Converter mapeamento customizado para o formato interno
+function convertCustomMapping(custom: CustomMapping): ColumnMap {
+  return {
+    email: custom.email,
+    name: custom.name,
+    phone: custom.phone || '',
+    taxId: custom.taxId || '',
+    product: custom.product || '',
+    transactionId: custom.transactionId,
+    total: custom.total || '',
+    status: custom.status,
+    statusPaid: custom.statusFilter,
+    zip: custom.zip,
+    address: custom.address,
+    addressNumber: custom.number,
+    addressComplement: custom.complement,
+    neighborhood: custom.neighborhood,
+    city: custom.city,
+    state: custom.state,
+  };
+}
+
 // POST - Criar novo job de importação
 export async function POST(request: NextRequest) {
   console.log('[IMPORT-CSV] Iniciando importação...');
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
-    const platform = formData.get('platform') as string || 'hubla';
-    console.log(`[IMPORT-CSV] Arquivo: ${file?.name}, Plataforma: ${platform}`);
+    const platform = formData.get('platform') as string || '';
+    const customMappingStr = formData.get('customMapping') as string || '';
+    const customStageId = formData.get('stageId') as string || '';
+
+    console.log(`[IMPORT-CSV] Arquivo: ${file?.name}, Plataforma: ${platform}, CustomMapping: ${!!customMappingStr}, CustomStageId: ${customStageId}`);
 
     if (!file) {
       return NextResponse.json({ success: false, error: 'Nenhum arquivo enviado' }, { status: 400 });
     }
 
-    const stageId = STAGES[platform];
-    const columns = COLUMN_MAP[platform];
+    let stageId: string;
+    let columns: ColumnMap;
+    let platformName: string;
 
-    if (!stageId || !columns) {
-      return NextResponse.json({ success: false, error: `Plataforma não suportada: ${platform}` }, { status: 400 });
+    // Verificar se é mapeamento customizado ou por plataforma
+    if (customMappingStr && customStageId) {
+      // Mapeamento customizado
+      try {
+        const customMapping = JSON.parse(customMappingStr) as CustomMapping;
+        columns = convertCustomMapping(customMapping);
+        stageId = customStageId;
+        platformName = 'custom';
+        console.log(`[IMPORT-CSV] Usando mapeamento customizado com stageId: ${stageId}`);
+      } catch (e) {
+        return NextResponse.json({ success: false, error: 'Mapeamento customizado inválido' }, { status: 400 });
+      }
+    } else if (platform) {
+      // Mapeamento por plataforma
+      stageId = STAGES[platform];
+      columns = COLUMN_MAP[platform];
+      platformName = platform;
+
+      if (!stageId || !columns) {
+        return NextResponse.json({ success: false, error: `Plataforma não suportada: ${platform}` }, { status: 400 });
+      }
+    } else {
+      return NextResponse.json({ success: false, error: 'Plataforma ou mapeamento customizado é obrigatório' }, { status: 400 });
     }
 
     // Ler e parsear CSV
@@ -546,7 +614,7 @@ export async function POST(request: NextRequest) {
       id: jobId,
       tipo: 'datacrazy',
       status: 'processando',
-      plataforma: platform,
+      plataforma: platformName,
       arquivo: file.name,
       total: rows.length,
       totalOriginal: allRows.length,
@@ -565,7 +633,7 @@ export async function POST(request: NextRequest) {
     console.log(`[IMPORT-CSV] Job ${jobId} criado, iniciando processamento em background...`);
 
     // Processar diretamente com rate limiting automático
-    processarEmBackground(jobId, platform, stageId, columns, rows, 0).catch((err) => {
+    processarEmBackground(jobId, platformName, stageId, columns, rows, 0).catch((err) => {
       console.error('[IMPORT-CSV] Erro no processamento em background:', err);
     });
 

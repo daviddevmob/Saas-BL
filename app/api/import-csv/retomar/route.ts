@@ -223,10 +223,12 @@ async function processarEmBackground(
 
   console.log(`[IMPORT-CSV-RETOMAR] Job ${jobId} retomando do índice ${startIndex}/${totalRows}`);
 
+  // Atualizar Firebase apenas quando o percentual mudar (para notificar o usuário)
   const atualizarFirebase = async (forcar = false) => {
     const percentualAtual = Math.floor((processados / totalRows) * 100);
 
-    if (!forcar && processados - ultimaAtualizacaoFirebase < FIREBASE_UPDATE_INTERVAL && percentualAtual === ultimoPercentual) {
+    // Só atualiza se o percentual mudou ou se for forçado
+    if (!forcar && percentualAtual === ultimoPercentual) {
       return;
     }
 

@@ -2178,83 +2178,187 @@ export default function EtiquetasUpload() {
           </p>
         </div>
 
-        {/* Upload Area */}
-        <div
-          className={`rounded-2xl border-2 border-dashed p-8 transition-all cursor-pointer ${
-            isDragging
-              ? 'border-blue-400 bg-blue-50'
-              : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50/50'
-          }`}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
+        {/* Container grid para Upload Area e Templates lado a lado */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${1 + (!isLoadingTemplates ? mappingTemplates.length : 0)}, 1fr)`,
+          gap: '1rem',
+        }}>
+          {/* Card: Importar CSV sem modelo */}
+          <div
+            className={`rounded-2xl border-2 border-dashed p-6 transition-all cursor-pointer flex flex-col items-center justify-center ${
+              isDragging
+                ? 'border-blue-400 bg-blue-50'
+                : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50/50'
+            }`}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onClick={() => fileInputRef.current?.click()}
+            style={{ minHeight: '180px' }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
 
-          <div className="flex flex-col items-center justify-center gap-4">
-            {/* Ícone CSV genérico */}
-            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M14 2V8H20" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M8 13H16" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M8 17H16" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
-
-            {isProcessing ? (
-              <div className="flex flex-col items-center gap-2">
-                <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
-                <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', color: '#64748B' }}>
-                  Processando CSV...
-                </p>
+            <div className="flex flex-col items-center justify-center gap-3 h-full">
+              {/* Ícone CSV genérico */}
+              <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M14 2V8H20" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M8 13H16" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M8 17H16" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
               </div>
-            ) : (
-              <>
+
+              {isProcessing ? (
+                <div className="flex flex-col items-center gap-2">
+                  <div className="w-6 h-6 border-3 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+                  <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+                    Processando...
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="text-center">
+                    <p
+                      style={{
+                        fontFamily: 'var(--font-public-sans)',
+                        fontWeight: 600,
+                        fontSize: '0.875rem',
+                        color: '#314158',
+                      }}
+                    >
+                      Importar CSV
+                    </p>
+                    <p
+                      style={{
+                        fontFamily: 'var(--font-inter)',
+                        fontSize: '0.75rem',
+                        color: '#64748B',
+                        marginTop: '0.25rem',
+                      }}
+                    >
+                      sem modelo
+                    </p>
+                  </div>
+
+                  <button
+                    className="px-3 py-1.5 rounded-lg text-white transition text-sm"
+                    style={{
+                      backgroundColor: '#3B82F6',
+                      fontFamily: 'var(--font-inter)',
+                      fontWeight: 500,
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    Selecionar
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Cards dos Templates - cada um como card individual */}
+          {!isLoadingTemplates && mappingTemplates.map((template) => (
+            <div
+              key={template.id}
+              className="rounded-2xl border-2 border-blue-200 bg-blue-50 p-6 transition-all cursor-pointer hover:border-blue-400 hover:bg-blue-100 flex flex-col items-center justify-center"
+              onClick={() => startImportWithTemplate(template)}
+              style={{ minHeight: '180px' }}
+            >
+              <div className="flex flex-col items-center justify-center gap-3 h-full">
+                {/* Logo ou ícone */}
+                <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center border border-blue-200">
+                  {template.logo ? (
+                    <Image
+                      src={`/lojas/${template.logo}`}
+                      alt={template.name}
+                      width={28}
+                      height={28}
+                      className="rounded-sm object-cover"
+                    />
+                  ) : (
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M14 2V8H20" stroke="#3B82F6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                </div>
+
                 <div className="text-center">
                   <p
                     style={{
                       fontFamily: 'var(--font-public-sans)',
                       fontWeight: 600,
-                      fontSize: '1rem',
-                      color: '#314158',
+                      fontSize: '0.875rem',
+                      color: '#1E40AF',
                     }}
                   >
-                    Arraste seu arquivo CSV aqui
+                    {template.name}
                   </p>
                   <p
                     style={{
                       fontFamily: 'var(--font-inter)',
-                      fontSize: '0.875rem',
+                      fontSize: '0.75rem',
                       color: '#64748B',
                       marginTop: '0.25rem',
                     }}
                   >
-                    ou clique para selecionar
+                    modelo salvo
                   </p>
                 </div>
 
-                <button
-                  className="px-4 py-2 rounded-lg text-white transition"
-                  style={{
-                    backgroundColor: '#3B82F6',
-                    fontFamily: 'var(--font-inter)',
-                    fontWeight: 500,
-                    fontSize: '0.875rem',
-                  }}
-                >
-                  Selecionar Arquivo
-                </button>
-              </>
-            )}
-          </div>
+                <div className="flex gap-2">
+                  <button
+                    className="px-3 py-1.5 rounded-lg text-white transition"
+                    style={{
+                      backgroundColor: '#3B82F6',
+                      fontFamily: 'var(--font-inter)',
+                      fontWeight: 500,
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    Usar
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEditModal(template);
+                    }}
+                    className="px-2 py-1.5 rounded-lg transition"
+                    style={{
+                      backgroundColor: '#E2E8F0',
+                      fontFamily: 'var(--font-inter)',
+                      fontWeight: 500,
+                      fontSize: '0.75rem',
+                      color: '#64748B',
+                    }}
+                    title="Editar modelo"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Input oculto para seleção de arquivo com template */}
+          <input
+            ref={templateFileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleTemplateFileSelect}
+            className="hidden"
+          />
         </div>
 
         {error && (
@@ -2262,129 +2366,6 @@ export default function EtiquetasUpload() {
             <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', color: '#DC2626' }}>
               {error}
             </p>
-          </div>
-        )}
-
-        {/* Templates Salvos */}
-        {!isLoadingTemplates && mappingTemplates.length > 0 && (
-          <div className="mt-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
-            <h3
-              style={{
-                fontFamily: 'var(--font-public-sans)',
-                fontWeight: 600,
-                fontSize: '0.875rem',
-                color: '#314158',
-                marginBottom: '0.75rem',
-              }}
-            >
-              📋 Importar com Modelo Salvo
-            </h3>
-            <p
-              style={{
-                fontFamily: 'var(--font-inter)',
-                fontSize: '0.75rem',
-                color: '#64748B',
-                marginBottom: '0.75rem',
-              }}
-            >
-              Clique em um modelo para importar o CSV usando o mapeamento salvo
-            </p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-              {mappingTemplates.map((template) => (
-                <div
-                  key={template.id}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.25rem',
-                  }}
-                >
-                  {/* Botão do Modelo */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startImportWithTemplate(template);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      padding: '0.5rem 1rem',
-                      fontFamily: 'var(--font-inter)',
-                      fontSize: '0.8rem',
-                      fontWeight: 500,
-                      color: '#1E40AF',
-                      backgroundColor: '#DBEAFE',
-                      border: '1px solid #93C5FD',
-                      borderRadius: '0.5rem 0.5rem 0 0',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                    }}
-                    onMouseOver={(e) => {
-                      e.currentTarget.style.backgroundColor = '#BFDBFE';
-                    }}
-                    onMouseOut={(e) => {
-                      e.currentTarget.style.backgroundColor = '#DBEAFE';
-                    }}
-                  >
-                    {template.logo && (
-                      <Image
-                        src={`/lojas/${template.logo}`}
-                        alt={template.name}
-                        width={20}
-                        height={20}
-                        className="rounded-sm object-cover"
-                      />
-                    )}
-                    {template.name}
-                  </button>
-                  {/* Botão Editar */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openEditModal(template);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '0.25rem',
-                      padding: '0.25rem',
-                      fontFamily: 'var(--font-inter)',
-                      fontSize: '0.65rem',
-                      color: '#64748B',
-                      backgroundColor: '#F1F5F9',
-                      border: '1px solid #E2E8F0',
-                      borderTop: 'none',
-                      borderRadius: '0 0 0.5rem 0.5rem',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                    }}
-                    onMouseOver={(e) => {
-                      e.currentTarget.style.backgroundColor = '#E2E8F0';
-                    }}
-                    onMouseOut={(e) => {
-                      e.currentTarget.style.backgroundColor = '#F1F5F9';
-                    }}
-                    title="Editar modelo"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                    </svg>
-                    Editar
-                  </button>
-                </div>
-              ))}
-            </div>
-            {/* Input oculto para seleção de arquivo com template */}
-            <input
-              ref={templateFileInputRef}
-              type="file"
-              accept=".csv"
-              onChange={handleTemplateFileSelect}
-              className="hidden"
-            />
           </div>
         )}
 
