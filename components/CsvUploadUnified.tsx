@@ -170,7 +170,7 @@ const CSV_DOCS: Record<string, {
   },
 };
 
-const JOBS_COLLECTION = 'jobs_importacao';
+const JOBS_COLLECTION = 'jobs_importacao_monitor';
 
 interface CsvUploadUnifiedProps {
   userEmail?: string;
@@ -585,39 +585,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
 
 
 
-  // Função para retomar job travado
-  const resumeJob = async () => {
-    if (!activeJob || files.length === 0 || isResuming) return;
 
-    const file = files[currentFileIndex];
-    if (!file) return;
-
-    setIsResuming(true);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('jobId', activeJob.id);
-
-    try {
-      const response = await fetch('/api/import-csv/retomar', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!data.success) {
-        setError(data.error || 'Erro ao retomar importação');
-      } else {
-        // 'isStalled' foi removido.
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao retomar importação');
-    }
-
-    setIsResuming(false);
-  };
 
   // Avançar para próximo arquivo quando job completar
   useEffect(() => {

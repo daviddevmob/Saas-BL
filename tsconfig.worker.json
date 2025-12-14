@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+      "compilerOptions": {
+          "module": "commonjs",
+          "outDir": "dist-worker",
+          "rootDir": ".",
+          "isolatedModules": false,
+          "noEmit": false,
+          "moduleResolution": "node"
+      },  "include": [
+    "lib/firebase.ts",
+    "lib/queue.ts",
+    "workers/csvProcessor.ts",
+    "workers/run.ts"
+  ]
+}
