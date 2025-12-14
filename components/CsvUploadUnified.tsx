@@ -581,16 +581,31 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const isCancelled = activeJob?.status === 'cancelado';
   const progress = activeJob?.total ? Math.round((activeJob.processados / activeJob.total) * 100) : 0;
 
-  // Detectar travamento: se passou mais de 2 minutos sem atualização durante processamento
+  // Detectar travamento: se o tempo desde a última atualização exceder um limite dinâmico
   const [isStalled, setIsStalled] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
 
   useEffect(() => {
-    if (isRunning && activeJob?.atualizadoEm) {
+    if (isRunning && activeJob?.atualizadoEm && activeJob?.total > 0) {
       const checkStalled = () => {
         const lastUpdate = new Date(activeJob.atualizadoEm).getTime();
         const now = Date.now();
-        const stalledThreshold = 2 * 60 * 1000; // 2 minutos
+
+        // Lógica de cálculo dinâmico
+        // Base: 150ms por linha (100ms de delay + 50ms de processamento)
+        // Lote: 1% do total de linhas
+        // Margem: 100% de segurança (x2)
+        // Mínimo: 2 minutos
+        const timePerLine = 150; // ms
+        const linesPerBatch = activeJob.total / 100;
+        const estimatedTimePerBatch = linesPerBatch * timePerLine;
+        const dynamicThreshold = estimatedTimePerBatch * 2; // Margem de 100%
+        const MINIMUM_THRESHOLD = 2 * 60 * 1000; // 2 minutos
+
+        const stalledThreshold = Math.max(dynamicThreshold, MINIMUM_THRESHOLD);
+        
+        // console.log(`[Watchdog] Limite dinâmico: ${(stalledThreshold / 60000).toFixed(2)} minutos`);
+
         setIsStalled(now - lastUpdate > stalledThreshold);
       };
 
@@ -600,7 +615,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
     } else {
       setIsStalled(false);
     }
-  }, [isRunning, activeJob?.atualizadoEm]);
+  }, [isRunning, activeJob?.atualizadoEm, activeJob?.total]);
 
   // Função para retomar job travado
   const resumeJob = async () => {
