@@ -44,7 +44,7 @@ interface ColumnMap {
   transactionId: string;
   total: string;
   status: string;
-  statusPaid: string;
+  statusPaid: string | string[];
   zip?: string;
   address?: string;
   addressNumber?: string;
@@ -371,7 +371,7 @@ const COLUMN_MAP: Record<string, {
   transactionId: string;
   total: string;
   status: string;
-  statusPaid: string;
+  statusPaid: string | string[];
   zip?: string;
   address?: string;
   addressNumber?: string;
@@ -395,25 +395,24 @@ const COLUMN_MAP: Record<string, {
     city: 'Endereço Cidade',
     state: 'Endereço Estado',
   },
-  hotmart: {
-    email: 'Email',
-    name: 'Nome',
-    phone: 'Telefone Final',
-    taxId: 'Documento',
-    product: 'Nome do Produto',
-    transactionId: 'Transação',
-    total: 'Preço Total',
-    status: 'Status',
-    statusPaid: 'Aprovado',
-    zip: 'CEP',
-    address: 'Endereço',
-    addressNumber: 'Número',
-    addressComplement: 'Complemento',
-    neighborhood: 'Bairro',
-    city: 'Cidade',
-    state: 'Estado',
-  },
-  eduzz: {
+      hotmart: {
+          email: 'Email',
+          name: 'Nome',
+          phone: 'Telefone Final',
+          taxId: 'Documento',
+          product: 'Nome do Produto',
+          transactionId: 'Transação',
+          total: 'Preço Total',
+          status: 'Status',
+          statusPaid: ['Aprovado', 'Completo'],
+          zip: 'CEP',
+          address: 'Endereço',
+          addressNumber: 'Número',
+          addressComplement: 'Complemento',
+          neighborhood: 'Bairro',
+          city: 'Cidade',
+          state: 'Estado',
+      },  eduzz: {
     email: 'Cliente / E-mail',
     name: 'Cliente / Nome',
     phone: 'Cliente / Fones',
@@ -589,6 +588,10 @@ export async function POST(request: NextRequest) {
     // Filtrar pagas
     const rows = allRows.filter(row => {
       const status = safeString(row[columns.status]);
+      // Checa se statusPaid é um array e usa .includes, ou mantém a lógica antiga
+      if (Array.isArray(columns.statusPaid)) {
+        return columns.statusPaid.includes(status);
+      }
       return status === columns.statusPaid;
     });
     console.log(`[IMPORT-CSV] Linhas com status "${columns.statusPaid}": ${rows.length}`);
