@@ -151,6 +151,8 @@ export async function POST(request: NextRequest) {
           type: 'exponential',
           delay: 1000,
         },
+        removeOnComplete: true, // Remove o job do Redis após a conclusão
+        removeOnFail: true, // Remove o job do Redis após todas as tentativas falharem
       },
     }));
 

@@ -34,9 +34,9 @@ function getCsvImportQueue() {
 const createCsvImportWorker = (processor) => {
     return new bullmq_1.Worker(QUEUE_NAME, processor, {
         connection: getRedisConnection(),
-        concurrency: 5,
+        concurrency: 2, // Controla o número de chamadas simultâneas para evitar rajadas
         limiter: {
-            max: 60,
+            max: 60, // Mantém o limite de 60 jobs por minuto, conforme limite por rota
             duration: 60000,
         },
     });
