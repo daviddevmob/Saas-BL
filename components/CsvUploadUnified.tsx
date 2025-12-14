@@ -581,41 +581,9 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
   const isCancelled = activeJob?.status === 'cancelado';
   const progress = activeJob?.total ? Math.round((activeJob.processados / activeJob.total) * 100) : 0;
 
-  // Detectar travamento: se o tempo desde a última atualização exceder um limite dinâmico
-  const [isStalled, setIsStalled] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
 
-  useEffect(() => {
-    if (isRunning && activeJob?.atualizadoEm && activeJob?.total > 0) {
-      const checkStalled = () => {
-        const lastUpdate = new Date(activeJob.atualizadoEm).getTime();
-        const now = Date.now();
 
-        // Lógica de cálculo dinâmico
-        // Base: 150ms por linha (100ms de delay + 50ms de processamento)
-        // Lote: 1% do total de linhas
-        // Margem: 100% de segurança (x2)
-        // Mínimo: 2 minutos
-        const timePerLine = 150; // ms
-        const linesPerBatch = activeJob.total / 100;
-        const estimatedTimePerBatch = linesPerBatch * timePerLine;
-        const dynamicThreshold = estimatedTimePerBatch * 2; // Margem de 100%
-        const MINIMUM_THRESHOLD = 2 * 60 * 1000; // 2 minutos
-
-        const stalledThreshold = Math.max(dynamicThreshold, MINIMUM_THRESHOLD);
-        
-        // console.log(`[Watchdog] Limite dinâmico: ${(stalledThreshold / 60000).toFixed(2)} minutos`);
-
-        setIsStalled(now - lastUpdate > stalledThreshold);
-      };
-
-      checkStalled();
-      const interval = setInterval(checkStalled, 10000); // Verificar a cada 10s
-      return () => clearInterval(interval);
-    } else {
-      setIsStalled(false);
-    }
-  }, [isRunning, activeJob?.atualizadoEm, activeJob?.total]);
 
   // Função para retomar job travado
   const resumeJob = async () => {
@@ -642,7 +610,7 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
       if (!data.success) {
         setError(data.error || 'Erro ao retomar importação');
       } else {
-        setIsStalled(false);
+        // 'isStalled' foi removido.
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao retomar importação');
@@ -815,93 +783,117 @@ export default function CsvUploadUnified({ userEmail }: CsvUploadUnifiedProps) {
             </span>
           </div>
 
-          {/* Stats */}
-          <div className="flex gap-4 flex-wrap mb-3">
-            <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#16A34A' }}>
-              ✅ {activeJob.sucessos} criados
-            </span>
-            <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
-              ⏭️ {activeJob.processados - activeJob.sucessos - activeJob.erros - activeJob.ignorados} existentes
-            </span>
-            <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#DC2626' }}>
-              ❌ {activeJob.erros} erros
-            </span>
-            <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#D97706' }}>
-              ⚠️ {activeJob.ignorados} ignorados
-            </span>
-          </div>
+                    {/* Stats */}
 
-          {/* Last message */}
-          <p
-            style={{
-              fontFamily: 'monospace',
-              fontSize: '0.75rem',
-              color: '#64748B',
-              backgroundColor: '#FEF3C7',
-              padding: '0.5rem',
-              borderRadius: '0.375rem',
-              margin: 0,
-              marginBottom: '0.75rem',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {activeJob.mensagem}
-          </p>
+                    <div className="flex gap-4 flex-wrap mb-3">
 
-          {/* Aviso de Travamento */}
-          {isStalled && (
-            <div
-              style={{
-                backgroundColor: '#FEE2E2',
-                border: '1px solid #FECACA',
-                borderRadius: '0.5rem',
-                padding: '0.75rem',
-                marginBottom: '0.75rem',
-              }}
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <span style={{ fontSize: '1.25rem' }}>⚠️</span>
-                <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#DC2626' }}>
-                  Processamento travado
-                </span>
-              </div>
-              <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#7F1D1D', margin: 0, marginBottom: '0.5rem' }}>
-                Sem atualização há mais de 2 minutos. O servidor pode ter reiniciado.
-                {activeJob.ultimoIndice !== undefined && (
-                  <> Último registro processado: <strong>{activeJob.ultimoIndice}</strong>.</>
-                )}
-              </p>
-              <button
-                onClick={resumeJob}
-                disabled={isResuming || files.length === 0}
-                style={{
-                  width: '100%',
-                  fontFamily: 'var(--font-inter)',
-                  fontSize: '0.875rem',
-                  fontWeight: 600,
-                  color: '#FFFFFF',
-                  backgroundColor: isResuming ? '#94A3B8' : '#F59E0B',
-                  border: 'none',
-                  borderRadius: '0.375rem',
-                  padding: '0.5rem 1rem',
-                  cursor: isResuming || files.length === 0 ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.2s',
-                }}
-              >
-                {isResuming ? 'Retomando...' : files.length === 0 ? 'Selecione o arquivo para retomar' : 'Retomar do último ponto'}
-              </button>
-              {files.length === 0 && (
-                <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.625rem', color: '#7F1D1D', margin: 0, marginTop: '0.25rem', textAlign: 'center' }}>
-                  Arraste o mesmo arquivo CSV novamente para retomar
-                </p>
-              )}
-            </div>
-          )}
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#16A34A' }}>
 
-          {/* Botão Cancelar */}
-          <button
+                        ✅ {activeJob.sucessos} criados
+
+                      </span>
+
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
+
+                        ⏭️ {activeJob.processados - activeJob.sucessos - activeJob.erros - activeJob.ignorados} existentes
+
+                      </span>
+
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#DC2626' }}>
+
+                        ❌ {activeJob.erros} erros
+
+                      </span>
+
+                      <span style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#D97706' }}>
+
+                        ⚠️ {activeJob.ignorados} ignorados
+
+                      </span>
+
+                    </div>
+
+          
+
+                    {/* Last message */}
+
+                    <p
+
+                      style={{
+
+                        fontFamily: 'monospace',
+
+                        fontSize: '0.75rem',
+
+                        color: '#64748B',
+
+                        backgroundColor: '#FEF3C7',
+
+                        padding: '0.5rem',
+
+                        borderRadius: '0.375rem',
+
+                        margin: 0,
+
+                        marginBottom: '0.75rem',
+
+                        whiteSpace: 'nowrap',
+
+                        overflow: 'hidden',
+
+                        textOverflow: 'ellipsis',
+
+                      }}
+
+                    >
+
+                      {activeJob.mensagem}
+
+                    </p>
+
+          
+
+                    {/* Aviso de atualização por porcentagem */}
+
+                    <div
+
+                      style={{
+
+                        backgroundColor: '#EFF6FF',
+
+                        border: '1px solid #BFDBFE',
+
+                        borderRadius: '0.5rem',
+
+                        padding: '0.75rem',
+
+                        marginBottom: '0.75rem',
+
+                        display: 'flex',
+
+                        alignItems: 'center',
+
+                        gap: '0.5rem'
+
+                      }}
+
+                    >
+
+                      <span style={{ fontSize: '1.25rem', color: '#3B82F6' }}>ℹ️</span>
+
+                      <p style={{ fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#1E3A8A', margin: 0 }}>
+
+                        Para otimizar o processamento, a barra de progresso é atualizada a cada 1% concluído. Pode haver uma pausa aparente durante o processamento de arquivos grandes.
+
+                      </p>
+
+                    </div>
+
+          
+
+                    {/* Botão Cancelar */}
+
+                    <button
             onClick={openCancelModal}
             style={{
               width: '100%',
