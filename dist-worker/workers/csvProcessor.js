@@ -112,39 +112,71 @@ stageId, platform) {
     return { status: 'exists', message: 'Negócio já existe', email, name };
 }
 // --- O Processador do Worker ---
+const firestore_2 = require("firebase/firestore");
+/**
+ * Tenta atualizar o documento do job pai. Se o documento não existir (erro 'not-found'),
+ * ele o cria com 'setDoc' e 'merge: true'. Isso lida com a condição de corrida
+ * em que o worker tenta atualizar um documento que ainda não foi totalmente propagado.
+ */
+async function updateParentJob(parentJobRef, dataToUpdate) {
+    try {
+        await (0, firestore_1.updateDoc)(parentJobRef, dataToUpdate);
+    }
+    catch (error) {
+        if (error.code === 'not-found' || (error.message && error.message.includes('NOT_FOUND'))) {
+            console.warn(`Documento pai não encontrado, tentando criar com setDoc({ merge: true }). ID: ${parentJobRef.id}`);
+            // Converte `increment(x)` para apenas `x` para o 'setDoc' inicial.
+            const initialData = Object.assign({}, dataToUpdate);
+            for (const key in initialData) {
+                if (initialData[key] && typeof initialData[key] === 'object' && 'toLegacySpec' in initialData[key]) {
+                    // É um objeto de incremento, pega o valor
+                    try {
+                        initialData[key] = initialData[key]._toLegacySpec().operands[0].integerValue;
+                    }
+                    catch (_a) {
+                        initialData[key] = 1; // Fallback para 1
+                    }
+                }
+            }
+            await (0, firestore_2.setDoc)(parentJobRef, initialData, { merge: true });
+        }
+        else {
+            // Se for outro erro, lança para o BullMQ lidar com a retentativa.
+            throw error;
+        }
+    }
+}
 const processor = async (job) => {
     const { row, columns, stageId, platform, parentJobId } = job.data;
     const parentJobRef = (0, firestore_1.doc)(firebase_1.db, 'jobs_importacao_monitor', parentJobId);
     try {
         const result = await processarLinha(row, columns, stageId, platform);
-        // Incrementa o contador de sucesso, erro ou ignorado
         const fieldToIncrement = result.status === 'created' ? 'sucessos' :
             result.status === 'skipped' ? 'ignorados' :
-                'existentes'; // 'exists' conta como 'existentes'
-        await (0, firestore_1.updateDoc)(parentJobRef, {
+                'existentes';
+        const updateData = {
             processados: (0, firestore_1.increment)(1),
             [fieldToIncrement]: (0, firestore_1.increment)(1),
             atualizadoEm: new Date().toISOString(),
             ultimaMensagem: `[${result.status}] ${safeString(result.email) || 'N/A'} - ${result.message}`,
-        });
+        };
+        await updateParentJob(parentJobRef, updateData);
         return result;
     }
     catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido no worker';
         console.error(`Erro ao processar job ${job.id} para ${row.email}:`, error);
-        // Salva o erro no job pai para visibilidade
-        await (0, firestore_1.updateDoc)(parentJobRef, {
+        const errorData = {
             processados: (0, firestore_1.increment)(1),
             erros: (0, firestore_1.increment)(1),
             atualizadoEm: new Date().toISOString(),
-            // Usar notação de ponto para atualizar um campo dentro de um mapa
             [`errosDetalhes.${job.id}`]: {
                 email: safeString(row.email) || 'não informado',
                 name: safeString(row.name) || 'não informado',
                 error: errorMsg.substring(0, 500)
             }
-        });
-        // Lança o erro novamente para que o BullMQ possa registrar a falha e tentar novamente se configurado
+        };
+        await updateParentJob(parentJobRef, errorData);
         throw error;
     }
 };
