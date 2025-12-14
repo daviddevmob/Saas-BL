@@ -184,6 +184,49 @@ export default function DashboardPage() {
   const [isUploadingLoginImage, setIsUploadingLoginImage] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && auth.currentUser) {
+      try {
+        // Validate image
+        const validationError = await validateImage(file);
+        if (validationError) {
+          alert(validationError.message);
+          return;
+        }
+
+        // Upload file to Firebase Storage
+        const storageRef = ref(storage, `profiles/${auth.currentUser.uid}/avatar`);
+        await uploadBytes(storageRef, file);
+
+        // Get download URL
+        const downloadURL = await getDownloadURL(storageRef);
+
+        // Update user photo state
+        setUserPhoto(downloadURL);
+
+        // Save to Firestore
+        await setDoc(
+          doc(db, 'users', auth.currentUser.uid),
+          { photoURL: downloadURL },
+          { merge: true }
+        );
+
+        // Update cache
+        const cachedData = localStorage.getItem('userCache');
+        if (cachedData) {
+          const userData = JSON.parse(cachedData);
+          userData.photoURL = downloadURL;
+          localStorage.setItem('userCache', JSON.stringify(userData));
+        }
+      } catch (err) {
+        console.error('Error uploading photo:', err);
+        alert('Erro ao fazer upload da foto. Tente novamente.');
+      }
+    }
+  };
 
   useEffect(() => {
     // Load from cache first
@@ -555,7 +598,14 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="flex-shrink-0 pt-8 px-6 pb-4 flex flex-col items-center border-b border-white/20">
-            <div className="w-[100px] h-[100px] rounded-full overflow-hidden mb-4 border-2 border-white/30">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleImageUpload}
+              accept="image/*"
+              style={{ display: 'none' }}
+            />
+            <div className="relative w-[100px] h-[100px] rounded-full overflow-hidden mb-4 border-2 border-white/30 group">
               <Image
                 src={userPhoto}
                 alt="Avatar"
@@ -563,6 +613,17 @@ export default function DashboardPage() {
                 height={100}
                 className="w-full h-full object-cover"
               />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 cursor-pointer"
+                aria-label="Upload new avatar"
+                title="Upload new avatar"
+              >
+                <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
             </div>
             <div className="text-center">
               <p
@@ -608,7 +669,7 @@ export default function DashboardPage() {
               >
                 {userBio || 'BrandingLab'}
               </p>
-
+          
               {/* Progress Indicator */}
               <div className="mt-3 w-[101px] mx-auto">
                 <div
@@ -629,6 +690,7 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+          
         )}
 
         {/* Sidebar Content - Scrollable Menu */}
@@ -1096,53 +1158,7 @@ export default function DashboardPage() {
                   </div>
                   <button
                     className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center transition border-2 border-white shadow-md"
-                    onClick={() => {
-                      const input = document.createElement('input');
-                      input.type = 'file';
-                      input.accept = 'image/*';
-                      input.onchange = async (e) => {
-                        const file = (e.target as HTMLInputElement).files?.[0];
-                        if (file && auth.currentUser) {
-                          try {
-                            // Validate image
-                            const validationError = await validateImage(file);
-                            if (validationError) {
-                              alert(validationError.message);
-                              return;
-                            }
-
-                            // Upload file to Firebase Storage
-                            const storageRef = ref(storage, `profiles/${auth.currentUser.uid}/avatar`);
-                            await uploadBytes(storageRef, file);
-
-                            // Get download URL
-                            const downloadURL = await getDownloadURL(storageRef);
-
-                            // Update user photo state
-                            setUserPhoto(downloadURL);
-
-                            // Save to Firestore
-                            await setDoc(
-                              doc(db, 'users', auth.currentUser.uid),
-                              { photoURL: downloadURL },
-                              { merge: true }
-                            );
-
-                            // Update cache
-                            const cachedData = localStorage.getItem('userCache');
-                            if (cachedData) {
-                              const userData = JSON.parse(cachedData);
-                              userData.photoURL = downloadURL;
-                              localStorage.setItem('userCache', JSON.stringify(userData));
-                            }
-                          } catch (err) {
-                            console.error('Error uploading photo:', err);
-                            alert('Erro ao fazer upload da foto. Tente novamente.');
-                          }
-                        }
-                      };
-                      input.click();
-                    }}
+                    onClick={() => fileInputRef.current?.click()}
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
