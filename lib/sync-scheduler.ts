@@ -6,9 +6,18 @@ let currentTask: ReturnType<typeof cron.schedule> | null = null;
 
 // URL base da aplicação
 const getAppUrl = () => {
-  return process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : 'http://localhost:3000';
+  // APP_URL para server-side (runtime)
+  if (process.env.APP_URL) {
+    return process.env.APP_URL;
+  }
+  // NEXT_PUBLIC_APP_URL para compatibilidade (build time)
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return 'http://localhost:3000';
 };
 
 async function executarSync() {
