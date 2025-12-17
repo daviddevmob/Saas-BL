@@ -26,6 +26,13 @@ const EVOLUTION_CONFIG = {
   useEvolution: process.env.WHATSAPP_USE_EVOLUTION === 'true',
 };
 
+// Configuração SwipeOne API para rastreio
+const SWIPEONE_CONFIG = {
+  apiUrl: 'https://api.swipeone.com',
+  apiKey: process.env.SWIPE_ONE_API || '',
+  workspaceId: '6940ca7e21f105674fb79e5b',
+};
+
 interface EtiquetaData {
   codigo: string;
   transactionId: string;
@@ -277,6 +284,200 @@ async function enviarWhatsAppClientes(etiquetas: Array<{
   console.log(`[WhatsApp Cliente] Concluído: ${enviados} enviado(s), ${erros} erro(s)`);
   return { enviados, erros };
 }
+
+// ========== SWIPEONE - Integração de Rastreio ==========
+
+interface SwipeOneContact {
+  _id: string;
+  email: string;
+  fullName?: string;
+  phone?: { countryCode: string; number: string };
+  customProperties?: {
+    ultimo_rastreio?: string;
+    todos_rastreios?: string;
+  };
+}
+
+// Timeout para requisições SwipeOne (10 segundos)
+const SWIPEONE_TIMEOUT_MS = 10000;
+
+// Fetch com timeout para SwipeOne
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = SWIPEONE_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// Criar ou atualizar contato no SwipeOne com rastreio (upsert via POST)
+async function upsertContatoComRastreio(dados: {
+  email: string;
+  nome: string;
+  telefone?: string;
+  codigoRastreio: string;
+  todosRastreiosAnteriores?: string;
+}): Promise<{ success: boolean; contact?: SwipeOneContact }> {
+  try {
+    // Concatenar rastreios
+    const novoTodosRastreios = dados.todosRastreiosAnteriores
+      ? `${dados.todosRastreiosAnteriores}, ${dados.codigoRastreio}`
+      : dados.codigoRastreio;
+
+    // Payload com campos no root level (SwipeOne aceita assim para custom properties)
+    const payload: Record<string, string> = {
+      email: dados.email,
+      fullName: dados.nome,
+      ultimo_rastreio: dados.codigoRastreio,
+      todos_rastreios: novoTodosRastreios,
+    };
+
+    if (dados.telefone) {
+      payload.phone = dados.telefone;
+    }
+
+    const response = await fetchWithTimeout(
+      `${SWIPEONE_CONFIG.apiUrl}/api/workspaces/${SWIPEONE_CONFIG.workspaceId}/contacts`,
+      {
+        method: 'POST',
+        headers: {
+          'x-api-key': SWIPEONE_CONFIG.apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[SwipeOne] Erro ao upsert contato: ${response.status} - ${errorText}`);
+      return { success: false };
+    }
+
+    const data = await response.json();
+    const contact = data?.data?.contact;
+
+    if (contact) {
+      console.log(`[SwipeOne] Contato atualizado: ${dados.email} | ultimo=${dados.codigoRastreio} | todos=${novoTodosRastreios}`);
+      return { success: true, contact };
+    }
+
+    return { success: false };
+  } catch (error) {
+    // Captura timeout e outros erros sem propagar
+    const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+    if (errorMsg.includes('abort')) {
+      console.error(`[SwipeOne] Timeout ao upsert contato: ${dados.email}`);
+    } else {
+      console.error(`[SwipeOne] Erro ao upsert contato:`, errorMsg);
+    }
+    return { success: false };
+  }
+}
+
+// Buscar contato no SwipeOne por email (para pegar todos_rastreios existente)
+async function buscarContatoSwipeOne(email: string): Promise<SwipeOneContact | null> {
+  try {
+    // POST para buscar/criar retorna o contato existente se já existe
+    const response = await fetchWithTimeout(
+      `${SWIPEONE_CONFIG.apiUrl}/api/workspaces/${SWIPEONE_CONFIG.workspaceId}/contacts`,
+      {
+        method: 'POST',
+        headers: {
+          'x-api-key': SWIPEONE_CONFIG.apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      }
+    );
+
+    if (!response.ok) {
+      console.error(`[SwipeOne] Erro ao buscar contato: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const contact = data?.data?.contact;
+
+    if (contact) {
+      console.log(`[SwipeOne] Contato encontrado: ${email}`);
+      return contact;
+    }
+
+    return null;
+  } catch (error) {
+    // Captura timeout e outros erros sem propagar
+    const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+    if (errorMsg.includes('abort')) {
+      console.error(`[SwipeOne] Timeout ao buscar contato: ${email}`);
+    } else {
+      console.error(`[SwipeOne] Erro ao buscar contato:`, errorMsg);
+    }
+    return null;
+  }
+}
+
+// Processar rastreios no SwipeOne para lista de etiquetas
+async function processarRastreiosSwipeOne(etiquetas: Array<{
+  clienteEmail: string;
+  clienteNome: string;
+  clienteTelefone: string | null;
+  codigo: string;
+}>): Promise<{ processados: number; erros: number }> {
+  let processados = 0;
+  let erros = 0;
+
+  // Filtrar etiquetas com email válido
+  const etiquetasComEmail = etiquetas.filter(e => e.clienteEmail && e.clienteEmail.includes('@'));
+
+  if (etiquetasComEmail.length === 0) {
+    console.log('[SwipeOne] Nenhuma etiqueta com email válido para processar');
+    return { processados: 0, erros: 0 };
+  }
+
+  console.log(`[SwipeOne] Processando ${etiquetasComEmail.length} etiqueta(s) com email válido`);
+
+  for (const etiqueta of etiquetasComEmail) {
+    try {
+      // 1. Buscar contato existente para pegar todos_rastreios anterior
+      const contatoExistente = await buscarContatoSwipeOne(etiqueta.clienteEmail);
+      const todosRastreiosAnteriores = contatoExistente?.customProperties?.todos_rastreios;
+
+      // 2. Upsert com novo rastreio
+      const resultado = await upsertContatoComRastreio({
+        email: etiqueta.clienteEmail,
+        nome: etiqueta.clienteNome,
+        telefone: etiqueta.clienteTelefone || undefined,
+        codigoRastreio: etiqueta.codigo,
+        todosRastreiosAnteriores,
+      });
+
+      if (resultado.success) {
+        processados++;
+      } else {
+        erros++;
+      }
+
+      // Delay para não sobrecarregar API
+      await delay(500);
+    } catch (error) {
+      console.error(`[SwipeOne] Erro ao processar ${etiqueta.clienteEmail}:`, error);
+      erros++;
+    }
+  }
+
+  console.log(`[SwipeOne] Concluído: ${processados} processado(s), ${erros} erro(s)`);
+  return { processados, erros };
+}
+
+// ========== FIM SWIPEONE ==========
 
 export async function POST(request: NextRequest) {
   try {
@@ -580,6 +781,20 @@ export async function POST(request: NextRequest) {
       console.log('[WhatsApp Cliente] Notificação ao cliente desabilitada');
     }
 
+    // Enviar rastreios para SwipeOne (apenas etiquetas NOVAS com email válido)
+    let swipeOneResultado = { processados: 0, erros: 0 };
+    if (SWIPEONE_CONFIG.apiKey && etiquetasNovasProcessadas.length > 0) {
+      console.log('\n========== ENVIANDO RASTREIOS SWIPEONE ==========');
+      try {
+        swipeOneResultado = await processarRastreiosSwipeOne(etiquetasNovasProcessadas);
+      } catch (swipeOneError) {
+        console.error('[SwipeOne] Erro ao processar rastreios:', swipeOneError);
+      }
+      console.log('=================================================\n');
+    } else if (!SWIPEONE_CONFIG.apiKey) {
+      console.log('[SwipeOne] API Key não configurada, pulando integração');
+    }
+
     // Cadastrar etiquetas NOVAS no Google Sheets (em paralelo, não bloqueia)
     if (etiquetasNovas.length > 0) {
       const dataGeracao = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -624,6 +839,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `Webhook disparado: ${etiquetasNovas.length} nova(s), ${todasEtiquetas.length} total para admin`,
       whatsappCliente: whatsappClienteResultado,
+      swipeOne: swipeOneResultado,
       payload: webhookPayload,
     });
 
