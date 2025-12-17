@@ -106,9 +106,9 @@ export async function POST(request: NextRequest) {
       Volumes: [
         {
           Peso: '500', // gramas
-          Altura: '5',
-          Largura: '15',
-          Comprimento: '20',
+          Altura: '8',        // cm
+          Largura: '22',      // cm
+          Comprimento: '26',  // cm
           ContaLote: '',
           ChaveRoteamento: '',
           CodigoBarraVolume: '',
@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
           ObservacaoQuatro: '',
           ObservacaoCinco: '',
           PosicaoVolume: '1',
-          Conteudo: 'Livro',
+          Conteudo: 'LIVRO',
           ValorDeclarado: '',
           AdicionaisVolume: '',
           VlrACobrar: '',
