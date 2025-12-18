@@ -143,7 +143,13 @@ function parseDate(dateStr: string): number {
 }
 
 async function saveMappingTemplate(name: string, mapping: ColumnMapping, logo?: string): Promise<string> {
+  console.log('[Firebase] saveMappingTemplate chamado');
+  console.log('[Firebase] name:', name);
+  console.log('[Firebase] mapping keys:', Object.keys(mapping));
+  console.log('[Firebase] logo:', logo);
+
   try {
+    console.log('[Firebase] Tentando addDoc em mapping_templates...');
     const docRef = await addDoc(collection(db, 'mapping_templates'), {
       name,
       mapping,
@@ -151,9 +157,10 @@ async function saveMappingTemplate(name: string, mapping: ColumnMapping, logo?: 
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     });
+    console.log('[Firebase] Documento criado com ID:', docRef.id);
     return docRef.id;
   } catch (err) {
-    console.error('Erro ao salvar template:', err);
+    console.error('[Firebase] ERRO ao salvar template:', err);
     throw err;
   }
 }
@@ -893,6 +900,8 @@ export default function EtiquetasUpload() {
 
   // Processar CSV com o mapeamento configurado
   const processCSVWithMapping = async (rows: Record<string, string>[], mapping: ColumnMapping) => {
+    console.log('[CSV] processCSVWithMapping iniciado com', rows.length, 'linhas');
+    console.log('[CSV] Mapping:', mapping);
     setIsProcessing(true);
     setShowColumnMappingModal(false);
 
@@ -949,9 +958,22 @@ export default function EtiquetasUpload() {
           etiquetaStatus: 'pending' as const,
         }));
 
+      console.log('[CSV] Filtrados:', filtered.length, 'pedidos físicos');
+      if (filtered.length === 0) {
+        console.log('[CSV] NENHUM pedido físico encontrado! Verificando primeiras linhas:');
+        rows.slice(0, 3).forEach((row, i) => {
+          console.log(`[CSV] Linha ${i}:`, {
+            produto: row[mapping.productName],
+            status: row[mapping.status],
+          });
+        });
+      }
+
       // Buscar etiquetas já geradas
       const transactionIds = filtered.map(s => s.transaction);
+      console.log('[CSV] Buscando etiquetas existentes para', transactionIds.length, 'transações...');
       const existingLabels = await fetchExistingLabels(transactionIds);
+      console.log('[CSV] Etiquetas existentes encontradas:', existingLabels.size);
 
       // Marcar as que já têm etiqueta e calcular status de envios
       const withLabels = filtered.map(sale => {
@@ -981,7 +1003,9 @@ export default function EtiquetasUpload() {
       });
 
       // Auto-merge: Carregar merges salvos do Firebase e aplicar
+      console.log('[CSV] Carregando merges salvos do Firebase...');
       const savedMerges = await loadSavedMerges();
+      console.log('[CSV] Merges carregados:', savedMerges.length);
       let finalSales: PhysicalSale[] = [...withLabels];
 
       for (const merge of savedMerges) {
@@ -1037,10 +1061,12 @@ export default function EtiquetasUpload() {
         }
       }
 
+      console.log('[CSV] Setando', finalSales.length, 'pedidos físicos para exibição');
       setPhysicalSales(finalSales);
+      console.log('[CSV] processCSVWithMapping CONCLUÍDO com sucesso');
     } catch (err) {
+      console.error('[CSV] ERRO em processCSVWithMapping:', err);
       setError('Erro ao processar o arquivo CSV');
-      console.error(err);
     } finally {
       setIsProcessing(false);
     }
@@ -1170,21 +1196,33 @@ export default function EtiquetasUpload() {
     }
   };
 
-  // Verificar se todos os campos estão mapeados
-  const allFieldsMapped = FIELD_DEFINITIONS.every(
+  // Verificar se os campos OBRIGATÓRIOS estão mapeados (não exige todos)
+  const allFieldsMapped = FIELD_DEFINITIONS.filter(f => f.required).every(
     field => columnMapping[field.key] && csvColumns.includes(columnMapping[field.key])
   );
 
   // Abrir modal de confirmação para salvar e processar
   const handleSaveTemplate = () => {
+    console.log('[Template] handleSaveTemplate chamado');
+    console.log('[Template] newTemplateName:', newTemplateName);
+    console.log('[Template] allFieldsMapped:', allFieldsMapped);
+    console.log('[Template] columnMapping:', columnMapping);
+    console.log('[Template] csvColumns:', csvColumns);
+
+    // Debug: mostrar quais campos OBRIGATÓRIOS não estão mapeados
+    const unmappedRequiredFields = FIELD_DEFINITIONS.filter(
+      field => field.required && (!columnMapping[field.key] || !csvColumns.includes(columnMapping[field.key]))
+    );
+    console.log('[Template] Campos obrigatórios não mapeados:', unmappedRequiredFields.map(f => f.label));
+
     if (!newTemplateName.trim()) {
       setError('Digite um nome para o modelo');
       return;
     }
 
-    // Verificar se todos os campos estão mapeados
+    // Verificar se os campos obrigatórios estão mapeados
     if (!allFieldsMapped) {
-      setError('Todos os campos devem estar mapeados para salvar o modelo');
+      setError(`Campos obrigatórios não mapeados: ${unmappedRequiredFields.map(f => f.label).join(', ')}`);
       return;
     }
 
@@ -1194,9 +1232,12 @@ export default function EtiquetasUpload() {
 
   // Salvar modelo e processar CSV
   const confirmSaveAndProcess = async () => {
+    console.log('[Template] confirmSaveAndProcess chamado');
     setIsSavingTemplate(true);
     try {
+      console.log('[Template] Salvando no Firebase...');
       const id = await saveMappingTemplate(newTemplateName.trim(), columnMapping, newTemplateLogo || undefined);
+      console.log('[Template] Salvo com sucesso! ID:', id);
       // Adicionar à lista local
       setMappingTemplates(prev => [...prev, {
         id,
@@ -2804,6 +2845,7 @@ export default function EtiquetasUpload() {
         )}
 
         {/* Modal de Confirmação Salvar e Processar */}
+        {showSaveAndProcessModal && console.log('[Template] RENDERIZANDO MODAL DE CONFIRMAÇÃO') as unknown as boolean}
         {showSaveAndProcessModal && (
           <div
             style={{
@@ -4807,6 +4849,108 @@ export default function EtiquetasUpload() {
                 }}
               >
                 Confirmar e Processar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação Salvar e Processar (no return principal) */}
+      {showSaveAndProcessModal && console.log('[Template] RENDERIZANDO MODAL DE CONFIRMAÇÃO (main return)') as unknown as boolean}
+      {showSaveAndProcessModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10001,
+          }}
+          onClick={cancelSaveAndProcess}
+        >
+          <div
+            style={{
+              backgroundColor: '#FFF',
+              borderRadius: '1rem',
+              padding: '1.5rem',
+              maxWidth: '400px',
+              width: '90%',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              style={{
+                margin: '0 0 1rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '1.125rem',
+                fontWeight: 600,
+                color: '#16A34A',
+              }}
+            >
+              Salvar e Processar
+            </h3>
+            <p
+              style={{
+                margin: '0 0 0.5rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                color: '#64748B',
+              }}
+            >
+              O modelo <strong>{newTemplateName}</strong> será salvo e o CSV será processado.
+            </p>
+            <p
+              style={{
+                margin: '0 0 1.5rem 0',
+                fontFamily: 'var(--font-inter)',
+                fontSize: '0.875rem',
+                color: '#64748B',
+              }}
+            >
+              Deseja continuar?
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={cancelSaveAndProcess}
+                disabled={isSavingTemplate}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#64748B',
+                  backgroundColor: '#F1F5F9',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: isSavingTemplate ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmSaveAndProcess}
+                disabled={isSavingTemplate}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  fontFamily: 'var(--font-inter)',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: '#FFF',
+                  backgroundColor: isSavingTemplate ? '#9CA3AF' : '#16A34A',
+                  border: 'none',
+                  borderRadius: '0.5rem',
+                  cursor: isSavingTemplate ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {isSavingTemplate ? 'Salvando...' : 'Salvar e Processar'}
               </button>
             </div>
           </div>
