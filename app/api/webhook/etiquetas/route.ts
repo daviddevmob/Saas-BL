@@ -826,7 +826,8 @@ export async function POST(request: NextRequest) {
       }));
 
       // Fire and forget - não bloqueia a resposta
-      fetch(`${request.nextUrl.origin}/api/google-sheets/etiquetas`, {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin;
+      fetch(`${appUrl}/api/google-sheets/etiquetas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ etiquetas: etiquetasParaSheets }),
