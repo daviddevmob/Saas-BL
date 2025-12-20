@@ -201,8 +201,8 @@ export default function LoginPage() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // Usuário logado, redirecionar para home (que vai validar perfil)
-        router.push('/');
+        // Usuário logado, redirecionar para dashboard
+        router.push('/dashboard');
       }
     });
 
