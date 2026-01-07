@@ -2,60 +2,551 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Image from 'next/image';
+import Papa from 'papaparse';
+import { db } from '@/lib/firebase';
+import { collection, query, where, getDocs, addDoc, Timestamp, deleteDoc, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 
-// Imports dos arquivos refatorados
-import {
-  PhysicalSale,
-  ColumnMapping,
-  MappingTemplate,
-  OriginalSaleData,
-} from './etiquetas/types';
+// Serviços ECT disponíveis (Correios) - códigos do contrato
+const SERVICOS_ECT = [
+  { code: '201501', name: 'IMPRESSO Normal Módico' },
+  { code: '3298', name: 'PAC Prata/Ouro/Platinum' },
+  { code: '3220', name: 'SEDEX Prata/Ouro/Platinum' },
+];
 
-import {
-  SERVICOS_ECT,
-  DEFAULT_SERVICO_ECT,
-  REQUIRED_FIELDS,
-  FIELD_DEFINITIONS,
-  AVAILABLE_LOGOS,
-} from './etiquetas/constants';
+const DEFAULT_SERVICO_ECT = '201501';
 
-import {
-  isPhysicalProduct,
-  parseDate,
-  parseCSV,
-  autoDetectMapping,
-  generateMergeId,
-  sanitizeForFirebase,
-} from './etiquetas/utils';
+// Função para verificar se é produto físico (contém "físico", "fisico" ou "kit" no nome)
+function isPhysicalProduct(productName: string): boolean {
+  const name = productName.toLowerCase();
+  // Verifica "físico" (com acento), "fisico" (sem acento) ou "kit"
+  return name.includes('físico') || name.includes('fisico') || name.includes('kit');
+}
 
-import {
-  fetchMappingTemplates,
-  saveMappingTemplate,
-  deleteMappingTemplate,
-  updateMappingTemplate,
-  fetchExistingLabels,
-  saveLabel,
-  loadEtiquetasSettings,
-  saveEtiquetasSettings,
-  loadSavedMerges,
-  saveMergeToFirebase,
-  removeMergeFromFirebase,
-} from './etiquetas/services';
+// Campos necessários para etiquetas
+const REQUIRED_FIELDS = ['transaction', 'name', 'zip'] as const;
 
-import {
-  ConfigModal,
-  NewUploadConfirmModal,
-  GenerationConfirmModal,
-  ServiceConfirmModal,
-  MergeWarningModal,
-  MergeStatusModal,
-  MergeDetailsModal,
-  SaveAndProcessModal,
-  DeleteTemplateModal,
-  IncompatibleModal,
-  EditTemplateModal,
-  ColumnMappingModal,
-} from './etiquetas/modals';
+// Definição dos campos para mapeamento
+const FIELD_DEFINITIONS: { key: string; label: string; required: boolean; description: string }[] = [
+  { key: 'transaction', label: 'Código da Transação', required: true, description: 'Identificador único do pedido' },
+  { key: 'productName', label: 'Nome do Produto', required: false, description: 'Nome do produto vendido' },
+  { key: 'productCode', label: 'Código do Produto', required: false, description: 'Código/SKU do produto' },
+  { key: 'name', label: 'Nome do Cliente', required: true, description: 'Nome completo do destinatário' },
+  { key: 'document', label: 'CPF/CNPJ', required: false, description: 'Documento do cliente' },
+  { key: 'email', label: 'Email', required: false, description: 'Email do cliente' },
+  { key: 'phone', label: 'Telefone', required: false, description: 'Telefone do cliente' },
+  { key: 'zip', label: 'CEP', required: true, description: 'CEP do endereço de entrega' },
+  { key: 'address', label: 'Logradouro', required: false, description: 'Rua/Avenida' },
+  { key: 'number', label: 'Número', required: false, description: 'Número do endereço' },
+  { key: 'complement', label: 'Complemento', required: false, description: 'Apartamento, bloco, etc.' },
+  { key: 'neighborhood', label: 'Bairro', required: false, description: 'Bairro' },
+  { key: 'city', label: 'Cidade', required: false, description: 'Cidade' },
+  { key: 'state', label: 'Estado/UF', required: false, description: 'Estado (sigla)' },
+  { key: 'country', label: 'País', required: false, description: 'País' },
+  { key: 'saleDate', label: 'Data da Venda', required: false, description: 'Data da transação' },
+  { key: 'totalPrice', label: 'Valor Total', required: false, description: 'Valor da compra' },
+];
+
+// Mapeamento padrão para Hotmart (formato 2025)
+const HOTMART_MAPPING: Record<string, string> = {
+  transaction: 'Código da transação',
+  status: 'Status da transação',
+  productName: 'Produto',
+  productCode: 'Código do produto',
+  name: 'Comprador(a)',
+  document: 'Documento',
+  email: 'Email do(a) Comprador(a)',
+  phone: 'Telefone',
+  zip: 'Código postal',
+  address: 'Endereço',
+  number: 'Número',
+  complement: 'Complemento',
+  neighborhood: 'Bairro',
+  city: 'Cidade',
+  state: 'Estado / Província',
+  country: 'País',
+  saleDate: 'Data da transação',
+  totalPrice: 'Valor de compra com impostos',
+};
+
+// Interface para mapeamento de colunas
+interface ColumnMapping {
+  [fieldKey: string]: string; // fieldKey -> csvColumnName
+}
+
+// Interface para template de mapeamento salvo no Firebase
+interface MappingTemplate {
+  id?: string;
+  name: string;
+  logo?: string; // Nome da imagem em public/lojas (ex: "hotmart.jpeg")
+  mapping: ColumnMapping;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+// Logos disponíveis em public/lojas
+const AVAILABLE_LOGOS = [
+  { name: 'hotmart.jpeg', label: 'Hotmart' },
+  { name: 'kiwwify.png', label: 'Kiwify' },
+  { name: 'eduzz.jpg', label: 'Eduzz' },
+  { name: 'hubla.jpeg', label: 'Hubla' },
+  { name: 'woo.png', label: 'WooCommerce' },
+];
+
+// Funções CRUD para templates de mapeamento no Firebase
+async function fetchMappingTemplates(): Promise<MappingTemplate[]> {
+  try {
+    const q = query(collection(db, 'mapping_templates'));
+    const snapshot = await getDocs(q);
+    const templates: MappingTemplate[] = [];
+    snapshot.forEach(docSnap => {
+      templates.push({
+        id: docSnap.id,
+        ...docSnap.data() as Omit<MappingTemplate, 'id'>
+      });
+    });
+    // Ordenar por nome
+    return templates.sort((a, b) => a.name.localeCompare(b.name));
+  } catch (err) {
+    console.error('Erro ao buscar templates:', err);
+    return [];
+  }
+}
+
+// Função para parsear data em qualquer formato (BR ou ISO)
+function parseDate(dateStr: string): number {
+  if (!dateStr) return 0;
+
+  // Tentar formato ISO primeiro (YYYY-MM-DD ou com T)
+  let date = new Date(dateStr);
+  if (!isNaN(date.getTime())) {
+    return date.getTime();
+  }
+
+  // Tentar formato brasileiro DD/MM/YYYY ou DD/MM/YYYY HH:mm:ss
+  const brMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (brMatch) {
+    const [, day, month, year, hour = '0', minute = '0', second = '0'] = brMatch;
+    date = new Date(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour),
+      parseInt(minute),
+      parseInt(second)
+    );
+    if (!isNaN(date.getTime())) {
+      return date.getTime();
+    }
+  }
+
+  return 0;
+}
+
+async function saveMappingTemplate(name: string, mapping: ColumnMapping, logo?: string): Promise<string> {
+  console.log('[Firebase] saveMappingTemplate chamado');
+  console.log('[Firebase] name:', name);
+  console.log('[Firebase] mapping keys:', Object.keys(mapping));
+  console.log('[Firebase] logo:', logo);
+
+  try {
+    console.log('[Firebase] Tentando addDoc em mapping_templates...');
+    const docRef = await addDoc(collection(db, 'mapping_templates'), {
+      name,
+      mapping,
+      logo: logo || null,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+    console.log('[Firebase] Documento criado com ID:', docRef.id);
+    return docRef.id;
+  } catch (err) {
+    console.error('[Firebase] ERRO ao salvar template:', err);
+    throw err;
+  }
+}
+
+async function updateMappingTemplate(id: string, name: string, mapping: ColumnMapping): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'mapping_templates', id), {
+      name,
+      mapping,
+      updatedAt: Timestamp.now(),
+    });
+  } catch (err) {
+    console.error('Erro ao atualizar template:', err);
+    throw err;
+  }
+}
+
+async function deleteMappingTemplate(id: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'mapping_templates', id));
+  } catch (err) {
+    console.error('Erro ao deletar template:', err);
+    throw err;
+  }
+}
+
+// Função para tentar detectar mapeamento automaticamente
+function autoDetectMapping(csvColumns: string[]): ColumnMapping {
+  const mapping: ColumnMapping = {};
+  const columnsLower = csvColumns.map(c => c.toLowerCase().trim());
+
+  // Tentar detectar cada campo baseado em palavras-chave
+  const detectionRules: { key: string; keywords: string[] }[] = [
+    { key: 'transaction', keywords: ['transação', 'transacao', 'transaction', 'pedido', 'order', 'código da transação'] },
+    { key: 'status', keywords: ['status'] },
+    { key: 'productName', keywords: ['produto', 'product', 'nome do produto'] },
+    { key: 'productCode', keywords: ['código do produto', 'codigo do produto', 'sku', 'product code'] },
+    { key: 'name', keywords: ['comprador', 'cliente', 'nome', 'name', 'buyer', 'destinatário'] },
+    { key: 'document', keywords: ['documento', 'cpf', 'cnpj', 'document'] },
+    { key: 'email', keywords: ['email', 'e-mail'] },
+    { key: 'phone', keywords: ['telefone', 'phone', 'celular', 'tel'] },
+    { key: 'zip', keywords: ['cep', 'código postal', 'codigo postal', 'zip', 'postal'] },
+    { key: 'address', keywords: ['endereço', 'endereco', 'logradouro', 'rua', 'address', 'street'] },
+    { key: 'number', keywords: ['número', 'numero', 'nº', 'number'] },
+    { key: 'complement', keywords: ['complemento', 'complement', 'apto', 'apartamento'] },
+    { key: 'neighborhood', keywords: ['bairro', 'neighborhood'] },
+    { key: 'city', keywords: ['cidade', 'city'] },
+    { key: 'state', keywords: ['estado', 'uf', 'state', 'província', 'provincia'] },
+    { key: 'country', keywords: ['país', 'pais', 'country'] },
+    { key: 'saleDate', keywords: ['data', 'date', 'data da transação', 'data da venda'] },
+    { key: 'totalPrice', keywords: ['valor', 'price', 'total', 'preço', 'preco'] },
+  ];
+
+  for (const rule of detectionRules) {
+    for (let i = 0; i < columnsLower.length; i++) {
+      const col = columnsLower[i];
+      if (rule.keywords.some(kw => col.includes(kw))) {
+        // Verificar se não é um falso positivo (ex: "email do comprador" não deve mapear para "name")
+        if (!mapping[rule.key]) {
+          mapping[rule.key] = csvColumns[i];
+          break;
+        }
+      }
+    }
+  }
+
+  return mapping;
+}
+
+// Colunas do CSV Hotmart (formato atualizado 2025) - mantido para compatibilidade
+const HOTMART_COLUMNS = {
+  productName: 'Produto',
+  productCode: 'Código do produto',
+  transaction: 'Código da transação',
+  status: 'Status da transação',
+  name: 'Comprador(a)',
+  document: 'Documento',
+  email: 'Email do(a) Comprador(a)',
+  phone: 'Telefone',
+  zip: 'Código postal',
+  city: 'Cidade',
+  state: 'Estado / Província',
+  neighborhood: 'Bairro',
+  country: 'País',
+  address: 'Endereço',
+  number: 'Número',
+  complement: 'Complemento',
+  saleDate: 'Data da transação',
+  totalPrice: 'Valor de compra com impostos',
+};
+
+
+interface PhysicalSale {
+  transaction: string;
+  productName: string;
+  productCode: string;
+  name: string;
+  document: string;
+  email: string;
+  phone: string;
+  zip: string;
+  city: string;
+  state: string;
+  neighborhood: string;
+  country: string;
+  address: string;
+  number: string;
+  complement: string;
+  saleDate: string;
+  totalPrice: string;
+  selected: boolean;
+  servicoEct: string; // Código do serviço ECT (Correios)
+  etiqueta?: string; // Última etiqueta gerada (se existir)
+  etiquetas?: string[]; // Todas as etiquetas geradas para este pedido
+  etiquetaStatus?: 'pending' | 'generated' | 'partial' | 'error';
+  enviosTotal: number; // Quantidade total de envios planejados
+  enviosRealizados: number; // Quantidade de envios já realizados
+  // Campos para pedidos mesclados
+  isMerged?: boolean; // Este pedido foi criado por merge
+  mergedTransactions?: string[]; // Lista de transactionIds originais (se mesclado)
+  mergedProductNames?: string[]; // Lista de nomes de produtos (se mesclado)
+  mergedOriginalSales?: OriginalSaleData[]; // Dados completos para restauração
+  mergedInto?: string; // Se este pedido foi mesclado em outro, qual é o ID
+}
+
+interface EtiquetaRecord {
+  transactionId: string;
+  etiqueta: string;
+  destinatario: string;
+  createdAt: Timestamp;
+  envioNumero?: number; // Qual envio é este (1, 2, 3...)
+  enviosTotal?: number; // Total de envios planejados
+  // Campos para pedidos mesclados
+  mergedTransactionIds?: string[]; // Lista de transactionIds se for pedido mesclado
+  produtos?: string[]; // Lista de produtos se for pedido mesclado
+}
+
+function parseCSV(text: string): Record<string, string>[] {
+  // Usar PapaParse para parsing robusto de CSVs grandes
+  const result = Papa.parse<Record<string, string>>(text, {
+    header: true,
+    skipEmptyLines: true,
+    dynamicTyping: false,
+    transformHeader: (h) => h.trim(),
+  });
+
+  console.log(`[CSV] PapaParse: ${result.data.length} linhas, ${result.meta.fields?.length || 0} colunas, delimitador: "${result.meta.delimiter}"`);
+
+  if (result.errors.length > 0) {
+    console.warn('[CSV] PapaParse warnings:', result.errors.slice(0, 5));
+  }
+
+  return result.data;
+}
+
+// Interface para dados de etiquetas existentes
+interface ExistingLabelData {
+  etiquetas: string[];
+  enviosRealizados: number;
+  enviosTotal: number;
+  ultimaEtiqueta: string;
+}
+
+// Buscar etiquetas já geradas no Firebase
+async function fetchExistingLabels(transactionIds: string[]): Promise<Map<string, ExistingLabelData>> {
+  const labelsMap = new Map<string, ExistingLabelData>();
+
+  if (transactionIds.length === 0) return labelsMap;
+
+  try {
+    // Firebase tem limite de 30 itens por query "in", então dividimos em chunks
+    const chunks = [];
+    for (let i = 0; i < transactionIds.length; i += 30) {
+      chunks.push(transactionIds.slice(i, i + 30));
+    }
+
+    for (const chunk of chunks) {
+      const q = query(
+        collection(db, 'etiquetas'),
+        where('transactionId', 'in', chunk)
+      );
+      const snapshot = await getDocs(q);
+      snapshot.forEach(doc => {
+        const data = doc.data() as EtiquetaRecord;
+        const existing = labelsMap.get(data.transactionId);
+
+        if (existing) {
+          // Já tem etiquetas, adiciona mais uma
+          existing.etiquetas.push(data.etiqueta);
+          existing.enviosRealizados = existing.etiquetas.length;
+          existing.ultimaEtiqueta = data.etiqueta;
+          // Atualiza enviosTotal se o registro tiver essa info
+          if (data.enviosTotal && data.enviosTotal > existing.enviosTotal) {
+            existing.enviosTotal = data.enviosTotal;
+          }
+        } else {
+          // Primeira etiqueta encontrada para esta transação
+          // Se não tem enviosTotal no Firebase, considera 1 (etiquetas antigas)
+          labelsMap.set(data.transactionId, {
+            etiquetas: [data.etiqueta],
+            enviosRealizados: 1,
+            enviosTotal: data.enviosTotal || 1, // Compatibilidade com etiquetas antigas
+            ultimaEtiqueta: data.etiqueta,
+          });
+        }
+      });
+    }
+  } catch (err) {
+    console.error('Erro ao buscar etiquetas existentes:', err);
+  }
+
+  return labelsMap;
+}
+
+// Salvar etiqueta no Firebase
+async function saveLabel(
+  transactionId: string,
+  etiqueta: string,
+  destinatario: string,
+  envioNumero: number,
+  enviosTotal: number,
+  mergedTransactionIds?: string[],
+  produtos?: string[],
+  observacaoEnvio?: string
+): Promise<void> {
+  try {
+    const docData: Record<string, unknown> = {
+      transactionId,
+      etiqueta,
+      destinatario,
+      envioNumero,
+      enviosTotal,
+      createdAt: Timestamp.now(),
+    };
+
+    // Adicionar dados de merge se existirem
+    if (mergedTransactionIds && mergedTransactionIds.length > 0) {
+      docData.mergedTransactionIds = mergedTransactionIds;
+    }
+    if (produtos && produtos.length > 0) {
+      docData.produtos = produtos;
+    }
+    // Adicionar observação do envio parcial se existir
+    if (observacaoEnvio) {
+      docData.observacaoEnvio = observacaoEnvio;
+    }
+
+    await addDoc(collection(db, 'etiquetas'), docData);
+  } catch (err) {
+    console.error('Erro ao salvar etiqueta:', err);
+    throw err;
+  }
+}
+
+// Interface para configurações de etiquetas
+interface EtiquetasSettings {
+  adminPhone: string;
+  clientPhoneOverride: string;
+  sendToN8n: boolean;
+  sendClientNotification: boolean;
+  useTestCredentials: boolean;
+  updatedAt?: Timestamp;
+}
+
+// ID fixo do documento de configurações
+const SETTINGS_DOC_ID = 'etiquetas_config';
+
+// Interface para dados originais de uma venda (para restauração completa)
+interface OriginalSaleData {
+  transaction: string;
+  productName: string;
+  productCode: string;
+  totalPrice: string;
+  document: string;
+  saleDate: string;
+  // Campos adicionais para restauração completa
+  phone: string;
+  country: string;
+  servicoEct: string;
+  // Campos de etiqueta para restauração do status
+  etiquetaStatus?: 'pending' | 'generated' | 'partial' | 'error';
+  etiqueta?: string;
+  etiquetas?: string[];
+  enviosTotal: number;
+  enviosRealizados: number;
+}
+
+// Interface para merge salvo no Firebase
+interface SavedMerge {
+  mergeId: string; // ID único e consistente do merge
+  originalSales: OriginalSaleData[]; // Dados completos dos pedidos originais
+  createdAt: Timestamp;
+}
+
+// Gerar ID consistente para merge baseado nos IDs das transações
+function generateMergeId(transactions: string[]): string {
+  // Usar hash simples dos IDs ordenados para evitar problemas com underscores
+  const sorted = [...transactions].sort();
+  return `MERGED_${sorted.map(t => t.replace(/[^a-zA-Z0-9]/g, '')).join('-')}`;
+}
+
+// Carregar merges salvos do Firebase
+async function loadSavedMerges(): Promise<SavedMerge[]> {
+  try {
+    const mergesRef = collection(db, 'etiquetas_merges');
+    const snapshot = await getDocs(mergesRef);
+    return snapshot.docs.map(doc => doc.data() as SavedMerge);
+  } catch (err) {
+    console.error('Erro ao carregar merges:', err);
+    return [];
+  }
+}
+
+// Limpar campos undefined para o Firebase (não aceita undefined)
+function sanitizeForFirebase<T extends Record<string, unknown>>(obj: T): T {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result as T;
+}
+
+// Salvar merge no Firebase
+async function saveMergeToFirebase(originalSales: OriginalSaleData[]): Promise<string> {
+  try {
+    const mergesRef = collection(db, 'etiquetas_merges');
+    const transactions = originalSales.map(s => s.transaction);
+    const mergeId = generateMergeId(transactions);
+    // Usar mergeId como ID do documento para evitar duplicatas
+    const docRef = doc(mergesRef, mergeId);
+    // Sanitizar cada sale para remover campos undefined
+    const sanitizedSales = originalSales.map(sale => sanitizeForFirebase(sale as unknown as Record<string, unknown>));
+    await setDoc(docRef, {
+      mergeId,
+      originalSales: sanitizedSales,
+      createdAt: Timestamp.now(),
+    });
+    console.log('Merge salvo no Firebase:', mergeId, transactions);
+    return mergeId;
+  } catch (err) {
+    console.error('Erro ao salvar merge:', err);
+    return '';
+  }
+}
+
+// Remover merge do Firebase
+async function removeMergeFromFirebase(mergeId: string): Promise<void> {
+  try {
+    const mergesRef = collection(db, 'etiquetas_merges');
+    const docRef = doc(mergesRef, mergeId);
+    await deleteDoc(docRef);
+    console.log('Merge removido do Firebase:', mergeId);
+  } catch (err) {
+    console.error('Erro ao remover merge:', err);
+  }
+}
+
+// Carregar configurações do Firebase
+async function loadEtiquetasSettings(): Promise<EtiquetasSettings | null> {
+  try {
+    const docRef = doc(db, 'settings', SETTINGS_DOC_ID);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as EtiquetasSettings;
+    }
+    return null;
+  } catch (err) {
+    console.error('Erro ao carregar configurações:', err);
+    return null;
+  }
+}
+
+// Salvar configurações no Firebase
+async function saveEtiquetasSettings(settings: Omit<EtiquetasSettings, 'updatedAt'>): Promise<void> {
+  try {
+    const docRef = doc(db, 'settings', SETTINGS_DOC_ID);
+    await setDoc(docRef, {
+      ...settings,
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('Erro ao salvar configurações:', err);
+  }
+}
 
 export default function EtiquetasUpload() {
   const [isDragging, setIsDragging] = useState(false);
@@ -814,7 +1305,13 @@ export default function EtiquetasUpload() {
     if (!templateToEdit?.id || !editTemplateName.trim()) return;
 
     try {
-      await updateMappingTemplate(templateToEdit.id, editTemplateName.trim(), templateToEdit.mapping, editTemplateLogo || null);
+      await updateMappingTemplate(templateToEdit.id, editTemplateName.trim(), templateToEdit.mapping);
+      // Atualizar também a logo no Firebase (precisamos de uma função separada ou atualizar a existente)
+      await updateDoc(doc(db, 'mapping_templates', templateToEdit.id), {
+        name: editTemplateName.trim(),
+        logo: editTemplateLogo || null,
+        updatedAt: Timestamp.now(),
+      });
       // Atualizar lista local
       setMappingTemplates(prev => prev.map(t =>
         t.id === templateToEdit.id
