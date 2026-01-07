@@ -41,6 +41,7 @@ export const HOTMART_MAPPING: ColumnMapping = {
   productCode: 'Código do produto',
   name: 'Comprador(a)',
   document: 'Documento',
+  email: 'Email do(a) Comprador(a)',
   phone: 'Telefone',
   zip: 'Código postal',
   address: 'Endereço',
