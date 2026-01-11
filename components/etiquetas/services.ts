@@ -10,7 +10,12 @@ import {
   doc,
   updateDoc,
   getDoc,
-  setDoc
+  setDoc,
+  orderBy,
+  limit,
+  startAfter,
+  QueryDocumentSnapshot,
+  DocumentData
 } from 'firebase/firestore';
 import {
   MappingTemplate,
@@ -19,7 +24,8 @@ import {
   ExistingLabelData,
   EtiquetasSettings,
   SavedMerge,
-  OriginalSaleData
+  OriginalSaleData,
+  TrackingEvent
 } from './types';
 import { SETTINGS_DOC_ID } from './constants';
 import { generateMergeId, sanitizeForFirebase } from './utils';
@@ -101,6 +107,45 @@ export async function deleteMappingTemplate(id: string): Promise<void> {
 
 // ========== ETIQUETAS ==========
 
+// Buscar histórico de etiquetas (paginado)
+export async function fetchLabelsHistory(
+  pageSize: number = 100,
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null = null
+): Promise<{ labels: EtiquetaRecord[], lastVisible: QueryDocumentSnapshot<DocumentData> | null }> {
+  try {
+    let q = query(
+      collection(db, 'etiquetas'),
+      orderBy('createdAt', 'desc'),
+      limit(pageSize)
+    );
+
+    if (lastDoc) {
+      q = query(
+        collection(db, 'etiquetas'),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDoc),
+        limit(pageSize)
+      );
+    }
+
+    const snapshot = await getDocs(q);
+    const labels: EtiquetaRecord[] = [];
+    
+    snapshot.forEach(docSnap => {
+      // Adiciona o ID do documento aos dados retornados se necessário, mas EtiquetaRecord não exige
+      labels.push(docSnap.data() as EtiquetaRecord);
+    });
+
+    return {
+      labels,
+      lastVisible: snapshot.docs[snapshot.docs.length - 1] || null
+    };
+  } catch (err) {
+    console.error('Erro ao buscar histórico de etiquetas:', err);
+    return { labels: [], lastVisible: null };
+  }
+}
+
 // Buscar etiquetas já geradas no Firebase
 export async function fetchExistingLabels(transactionIds: string[]): Promise<Map<string, ExistingLabelData>> {
   const labelsMap = new Map<string, ExistingLabelData>();
@@ -161,7 +206,11 @@ export async function saveLabel(
   enviosTotal: number,
   mergedTransactionIds?: string[],
   produtos?: string[],
-  observacaoEnvio?: string
+  observacaoEnvio?: string,
+  // Novos campos opcionais
+  productName?: string,
+  service?: string,
+  zip?: string
 ): Promise<void> {
   try {
     const docData: Record<string, unknown> = {
@@ -185,10 +234,57 @@ export async function saveLabel(
       docData.observacaoEnvio = observacaoEnvio;
     }
 
+    // Adicionar campos extras de forma segura (try-catch interno ou verificações simples)
+    if (productName) docData.productName = productName;
+    if (service) docData.service = service;
+    if (zip) docData.zip = zip;
+
     await addDoc(collection(db, 'etiquetas'), docData);
   } catch (err) {
     console.error('Erro ao salvar etiqueta:', err);
-    throw err;
+    // Não relançar erro para não quebrar fluxo principal, mas logar
+  }
+}
+
+// Atualizar status de rastreio da etiqueta
+export async function updateLabelTrackingStatus(
+  docId: string, // ID do documento no Firebase (não o transactionId)
+  status: string,
+  events: TrackingEvent[] = []
+): Promise<void> {
+  try {
+    // Como labels não tem ID no tipo EtiquetaRecord original, precisamos garantir que quem chama tenha o ID do doc.
+    // No fetchLabelsHistory vamos garantir que o ID venha junto ou fazer update por query.
+    // Para simplificar e ser robusto: Update via query pelo 'etiqueta' (código de rastreio é único)
+    
+    const q = query(collection(db, 'etiquetas'), where('etiqueta', '==', docId));
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty) {
+      const docRef = snapshot.docs[0].ref;
+      await updateDoc(docRef, {
+        trackingStatus: status,
+        trackingLastUpdate: Timestamp.now(),
+        trackingEvents: events
+      });
+    }
+  } catch (err) {
+    console.error('Erro ao atualizar rastreio:', err);
+  }
+}
+
+// Buscar etiqueta pelo Transaction ID (para busca avulsa)
+export async function fetchLabelByTransactionId(transactionId: string): Promise<EtiquetaRecord | null> {
+  try {
+    const q = query(collection(db, 'etiquetas'), where('transactionId', '==', transactionId));
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      return snapshot.docs[0].data() as EtiquetaRecord;
+    }
+    return null;
+  } catch (err) {
+    console.error('Erro ao buscar etiqueta por transação:', err);
+    return null;
   }
 }
 

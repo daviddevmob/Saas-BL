@@ -80,6 +80,23 @@ export interface EtiquetaRecord {
   // Campos para pedidos mesclados
   mergedTransactionIds?: string[]; // Lista de transactionIds se for pedido mesclado
   produtos?: string[]; // Lista de produtos se for pedido mesclado
+  // Campos opcionais extras para histórico visual
+  productName?: string;
+  service?: string; // Serviço ECT
+  zip?: string;
+  updatedAt?: Timestamp;
+  // Campos de Rastreamento (Sincronização)
+  trackingStatus?: string; // ex: "Entregue", "Em trânsito", "Aguardando postagem"
+  trackingLastUpdate?: Timestamp; // Quando foi a última vez que checamos na API
+  trackingEvents?: TrackingEvent[]; // Histórico completo
+}
+
+export interface TrackingEvent {
+  data: string;
+  hora: string;
+  local: string;
+  status: string;
+  subStatus?: string[];
 }
 
 // Interface para dados de etiquetas existentes
