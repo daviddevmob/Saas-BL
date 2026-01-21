@@ -1462,26 +1462,30 @@ export default function EtiquetasUpload() {
 
       <ColumnMappingModal
         isOpen={showColumnMappingModal}
-        onClose={() => { setShowColumnMappingModal(false); resetUpload(); }}
-        onConfirm={confirmColumnMapping}
         csvColumns={csvColumns}
-        mapping={columnMapping}
-        onMappingChange={updateMapping}
-        onSaveTemplate={handleSaveTemplate}
+        columnMapping={columnMapping}
+        onUpdateMapping={updateMapping}
         onClearMapping={clearSavedMapping}
+        onCancel={() => { setShowColumnMappingModal(false); resetUpload(); }}
+        onConfirm={confirmColumnMapping}
+        // Save template state
+        showSaveTemplateModal={showSaveTemplateModal}
+        setShowSaveTemplateModal={setShowSaveTemplateModal}
+        newTemplateName={newTemplateName}
+        setNewTemplateName={setNewTemplateName}
+        newTemplateLogo={newTemplateLogo}
+        setNewTemplateLogo={setNewTemplateLogo}
+        isSavingTemplate={isSavingTemplate}
+        allFieldsMapped={allFieldsMapped}
+        onSaveTemplate={handleSaveTemplate}
       />
 
       <SaveAndProcessModal
         isOpen={showSaveAndProcessModal}
-        onClose={cancelSaveAndProcess}
+        onCancel={cancelSaveAndProcess}
         onConfirm={confirmSaveAndProcess}
         templateName={newTemplateName}
-        setTemplateName={setNewTemplateName}
-        templateLogo={newTemplateLogo}
-        setTemplateLogo={setNewTemplateLogo}
-        availableLogos={AVAILABLE_LOGOS}
         isSaving={isSavingTemplate}
-        error={error}
       />
 
       <GenerationConfirmModal
@@ -1494,6 +1498,17 @@ export default function EtiquetasUpload() {
         setConfirmEtiquetasText={setConfirmEtiquetasText}
         confirmEnviarText={confirmEnviarText}
         setConfirmEnviarText={setConfirmEnviarText}
+        ordemPrioridade={ordemPrioridade}
+        setOrdemPrioridade={setOrdemPrioridade}
+        observacaoGeral={observacaoGeral}
+        setObservacaoGeral={setObservacaoGeral}
+        envioObservacoes={envioObservacoes}
+        setEnvioObservacoes={setEnvioObservacoes}
+        pendingGeneration={pendingGeneration}
+        sendToN8n={sendToN8n}
+        sendClientNotification={sendClientNotification}
+        clientPhoneOverride={clientPhoneOverride}
+        isConfirmationValid={isConfirmationValid}
       />
 
       <ServiceConfirmModal
@@ -1501,34 +1516,34 @@ export default function EtiquetasUpload() {
         onClose={() => setShowServiceConfirmModal(false)}
         onConfirm={confirmGeneration}
         selectedServicoEct={selectedServicoEct}
-        setSelectedServicoEct={setSelectedServicoEct}
-        servicosEct={SERVICOS_ECT}
-        pedidosCount={pendingGeneration.length}
-        envioObservacoes={envioObservacoes}
-        setEnvioObservacoes={setEnvioObservacoes}
-        pedidos={pendingGeneration}
+        pendingGeneration={pendingGeneration}
         ordemPrioridade={ordemPrioridade}
         setOrdemPrioridade={setOrdemPrioridade}
         observacaoGeral={observacaoGeral}
         setObservacaoGeral={setObservacaoGeral}
+        envioObservacoes={envioObservacoes}
+        setEnvioObservacoes={setEnvioObservacoes}
       />
 
       <MergeWarningModal
         isOpen={showMergeWarningModal}
-        onClose={cancelMerge}
+        onCancel={cancelMerge}
         onConfirm={confirmMerge}
-        pedidosCount={pendingMerge.length}
+        pendingMerge={pendingMerge}
       />
 
       <MergeStatusModal
         isOpen={showMergeStatusModal}
         onClose={() => { setShowMergeStatusModal(false); setPendingMerge([]); }}
-        onConfirm={(choice) => executeMerge(pendingMerge, choice)}
+        onUseExisting={() => executeMerge(pendingMerge, 'use_existing')}
+        onGenerateNew={() => executeMerge(pendingMerge, 'generate_new')}
+        pendingMerge={pendingMerge}
       />
 
       <IncompatibleModal
         isOpen={showIncompatibleModal}
-        onClose={handleIncompatibleCancel}
+        template={selectedTemplate}
+        onCancel={handleIncompatibleCancel}
         onCreateNew={handleIncompatibleCreateNew}
       />
     </div>
