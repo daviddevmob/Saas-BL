@@ -110,6 +110,11 @@ async function processarRegistroComCache(
   if (phone.startsWith('+')) phone = phone.substring(1);
   phone = phone.replace(/\D/g, '');
 
+  // Corrigir DDI Brasil se ausente (assumindo DDD + 8 ou 9 dígitos)
+  if (phone.length >= 10 && phone.length <= 11) {
+    phone = '55' + phone;
+  }
+
   const taxId = safeString(row[columns.taxId]).replace(/\D/g, '');
 
   const zipCode = safeString(row[columns.zip || '']);
