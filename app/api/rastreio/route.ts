@@ -72,8 +72,8 @@ export async function GET(request: NextRequest) {
             eventos.push({
                 data: dataFormatada,
                 hora: horaFormatada,
-                status: dMatch[1],
-                local: `${cMatch ? cMatch[1] : ''} / ${uMatch ? uMatch[1] : ''}`,
+                status: descricaoMatch[1],
+                local: `${cidadeMatch ? cidadeMatch[1] : ''} / ${ufMatch ? ufMatch[1] : ''}`,
                 subStatus: []
             });
         }
