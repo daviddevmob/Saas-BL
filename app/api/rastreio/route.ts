@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
         const ufMatch = regexUF.exec(parte);
 
         if (descricaoMatch && dataMatch) {
-            const fullDate = dtMatch[1];
+            const fullDate = dataMatch[1];
             let dataFormatada = fullDate;
             let horaFormatada = '';
 
