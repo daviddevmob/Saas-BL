@@ -1,5 +1,7 @@
 'use client';
 
+import { SERVICOS_ECT } from '../constants';
+
 interface ConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -13,6 +15,8 @@ interface ConfigModalProps {
   setAdminPhone: (value: string) => void;
   clientPhoneOverride: string;
   setClientPhoneOverride: (value: string) => void;
+  selectedServicoEct: string;
+  setSelectedServicoEct: (value: string) => void;
   onSave: () => void;
 }
 
@@ -29,6 +33,8 @@ export default function ConfigModal({
   setAdminPhone,
   clientPhoneOverride,
   setClientPhoneOverride,
+  selectedServicoEct,
+  setSelectedServicoEct,
   onSave,
 }: ConfigModalProps) {
   if (!isOpen) return null;
@@ -85,6 +91,34 @@ export default function ConfigModal({
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </button>
+        </div>
+
+        {/* Seleção de Serviço ECT */}
+        <div style={{ marginBottom: '1rem' }}>
+          <label style={{ display: 'block', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', fontWeight: 600, color: '#64748B', marginBottom: '0.375rem' }}>
+            📦 Serviço de Envio Padrão
+          </label>
+          <select
+            value={selectedServicoEct}
+            onChange={(e) => setSelectedServicoEct(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '0.625rem 0.75rem',
+              fontFamily: 'var(--font-inter)',
+              fontSize: '0.875rem',
+              color: '#1E293B',
+              backgroundColor: '#FFF',
+              border: '1px solid #E2E8F0',
+              borderRadius: '0.5rem',
+              boxSizing: 'border-box',
+            }}
+          >
+            {SERVICOS_ECT.map((servico) => (
+              <option key={servico.code} value={servico.code}>
+                {servico.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Toggle: Modo Teste VIPP */}

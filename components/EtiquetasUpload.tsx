@@ -1222,6 +1222,8 @@ export default function EtiquetasUpload() {
           setAdminPhone={setAdminPhone}
           clientPhoneOverride={clientPhoneOverride}
           setClientPhoneOverride={setClientPhoneOverride}
+          selectedServicoEct={selectedServicoEct}
+          setSelectedServicoEct={setSelectedServicoEct}
           onSave={handleSaveSettings}
         />
       </div>
@@ -1457,6 +1459,8 @@ export default function EtiquetasUpload() {
         setAdminPhone={setAdminPhone}
         clientPhoneOverride={clientPhoneOverride}
         setClientPhoneOverride={setClientPhoneOverride}
+        selectedServicoEct={selectedServicoEct}
+        setSelectedServicoEct={setSelectedServicoEct}
         onSave={handleSaveSettings}
       />
 
