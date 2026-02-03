@@ -3,7 +3,8 @@
     "allow": [
       "Bash(curl -s -X POST \"https://api.correios.com.br/token/v1/autentica/cartaopostagem\" -H \"Content-Type: application/json\" -H \"Authorization: Basic cws-ch1_mHVmqBbd7WwxSS0UEo6NTk4NDEzODUwMDAxNjI6OTkxMjcyODQyOA_MTpQbDA63sDnMqcuLQZ7Dla\" -d \"{\"\"numero\"\":\"\"0079754520\"\"}\")",
       "Bash(curl:*)",
-      "Bash(python -m json.tool:*)"
+      "Bash(python -m json.tool:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

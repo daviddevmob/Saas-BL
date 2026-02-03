@@ -969,7 +969,21 @@ export default function EtiquetasUpload() {
               observacoes[sale.transaction],
               sale.productName,
               selectedServicoEct,
-              sale.zip
+              sale.zip,
+              // Dados completos do destinatário para permitir reenvio futuro
+              {
+                nome: sale.name,
+                documento: sale.document,
+                email: sale.email,
+                telefone: sale.phone,
+                logradouro: sale.address,
+                numero: sale.number || 'S/N',
+                complemento: sale.complement,
+                bairro: sale.neighborhood,
+                cidade: sale.city,
+                uf: sale.state,
+                cep: sale.zip?.replace(/\D/g, '') || '',
+              }
             );
 
             etiquetasNovas.push({

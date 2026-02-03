@@ -69,6 +69,21 @@ export interface PhysicalSale {
   mergedInto?: string; // Se este pedido foi mesclado em outro, qual é o ID
 }
 
+// Interface para dados do destinatário (para reenvio)
+export interface DestinatarioData {
+  nome: string;
+  documento?: string;
+  email?: string;
+  telefone?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+  cep?: string;
+}
+
 // Interface para registro de etiqueta no Firebase
 export interface EtiquetaRecord {
   transactionId: string;
@@ -89,6 +104,8 @@ export interface EtiquetaRecord {
   trackingStatus?: string; // ex: "Entregue", "Em trânsito", "Aguardando postagem"
   trackingLastUpdate?: Timestamp; // Quando foi a última vez que checamos na API
   trackingEvents?: TrackingEvent[]; // Histórico completo
+  // Dados completos do destinatário (para reenvio)
+  destinatarioData?: DestinatarioData;
 }
 
 export interface TrackingEvent {

@@ -197,6 +197,21 @@ export async function fetchExistingLabels(transactionIds: string[]): Promise<Map
   return labelsMap;
 }
 
+// Interface para dados completos do destinatário (para reenvio)
+interface DestinatarioCompleto {
+  nome: string;
+  documento?: string;
+  email?: string;
+  telefone?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+  cep?: string;
+}
+
 // Salvar etiqueta no Firebase
 export async function saveLabel(
   transactionId: string,
@@ -210,7 +225,9 @@ export async function saveLabel(
   // Novos campos opcionais
   productName?: string,
   service?: string,
-  zip?: string
+  zip?: string,
+  // Dados completos do destinatário (para permitir reenvio)
+  destinatarioData?: DestinatarioCompleto
 ): Promise<void> {
   try {
     const docData: Record<string, unknown> = {
@@ -238,6 +255,11 @@ export async function saveLabel(
     if (productName) docData.productName = productName;
     if (service) docData.service = service;
     if (zip) docData.zip = zip;
+
+    // Salvar dados completos do destinatário para permitir reenvio futuro
+    if (destinatarioData) {
+      docData.destinatarioData = destinatarioData;
+    }
 
     await addDoc(collection(db, 'etiquetas'), docData);
   } catch (err) {

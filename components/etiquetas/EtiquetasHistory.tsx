@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { EtiquetaRecord, TrackingEvent } from './types';
-import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId } from './services';
+import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId, saveLabel, loadEtiquetasSettings } from './services';
 import { formatDateBR, formatPhone } from './utils';
+import { SERVICOS_ECT, DEFAULT_SERVICO_ECT } from './constants';
 import { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 
 interface EtiquetasHistoryProps {
@@ -40,6 +41,38 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
 
   // Filtro de status
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'in_transit' | 'delivered'>('all');
+
+  // Estados para Modal de Reenvio
+  const [showReenvioModal, setShowReenvioModal] = useState(false);
+  const [reenvioServico, setReenvioServico] = useState(DEFAULT_SERVICO_ECT);
+  const [isGeneratingReenvio, setIsGeneratingReenvio] = useState(false);
+  const [reenvioProgress, setReenvioProgress] = useState({ current: 0, total: 0, success: 0, errors: 0 });
+
+  // Modal de aviso (sem dados de endereço)
+  const [showNoDataModal, setShowNoDataModal] = useState(false);
+  const [noDataLabels, setNoDataLabels] = useState<string[]>([]);
+
+  // Configurações do sistema
+  const [useTestCredentials, setUseTestCredentials] = useState(false);
+  const [sendToN8n, setSendToN8n] = useState(true);
+  const [sendClientNotification, setSendClientNotification] = useState(false);
+  const [adminPhone, setAdminPhone] = useState('5585987080090');
+  const [clientPhoneOverride, setClientPhoneOverride] = useState('');
+
+  // Carregar configurações
+  useEffect(() => {
+    const loadSettings = async () => {
+      const settings = await loadEtiquetasSettings();
+      if (settings) {
+        setUseTestCredentials(settings.useTestCredentials || false);
+        setSendToN8n(settings.sendToN8n !== false);
+        setSendClientNotification(settings.sendClientNotification || false);
+        setAdminPhone(settings.adminPhone || '5585987080090');
+        setClientPhoneOverride(settings.clientPhoneOverride || '');
+      }
+    };
+    loadSettings();
+  }, []);
 
   // Carregar dados iniciais
   useEffect(() => {
@@ -338,6 +371,216 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
     }
   };
 
+  // --- Reenvio de Etiquetas ---
+  const handleOpenReenvioModal = () => {
+    // Verificar se as etiquetas selecionadas têm dados do destinatário
+    const selectedRecords = labels.filter(l => selectedLabels.has(l.etiqueta));
+    const semDados = selectedRecords.filter(l => !l.destinatarioData);
+
+    if (semDados.length > 0) {
+      setNoDataLabels(semDados.map(l => l.etiqueta));
+      setShowNoDataModal(true);
+      return;
+    }
+
+    setShowReenvioModal(true);
+  };
+
+  const handleGenerateReenvio = async () => {
+    const selectedRecords = labels.filter(l => selectedLabels.has(l.etiqueta) && l.destinatarioData);
+
+    if (selectedRecords.length === 0) {
+      alert('Nenhuma etiqueta válida selecionada para reenvio.');
+      return;
+    }
+
+    setIsGeneratingReenvio(true);
+    setReenvioProgress({ current: 0, total: selectedRecords.length, success: 0, errors: 0 });
+
+    let successCount = 0;
+    let errorCount = 0;
+    const novasEtiquetas: string[] = [];
+    const etiquetasParaWebhook: any[] = [];
+
+    // 1. GERAR ETIQUETAS NA VIPP
+    for (let i = 0; i < selectedRecords.length; i++) {
+      const label = selectedRecords[i];
+      setReenvioProgress(prev => ({ ...prev, current: i + 1 }));
+
+      try {
+        const dest = label.destinatarioData!;
+        const novoTransactionId = `${label.transactionId}-REENVIO-${Date.now()}`;
+
+        const response = await fetch('/api/vipp/postar-objeto', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transactionId: novoTransactionId,
+            servicoEct: reenvioServico,
+            useTestCredentials,
+            destinatario: {
+              nome: dest.nome,
+              documento: dest.documento || '',
+              logradouro: dest.logradouro || '',
+              numero: dest.numero || 'S/N',
+              complemento: dest.complemento || '',
+              bairro: dest.bairro || '',
+              cidade: dest.cidade || '',
+              uf: dest.uf || '',
+              cep: dest.cep?.replace(/\D/g, '') || '',
+              telefone: dest.telefone || '',
+              email: dest.email || '',
+            },
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.etiqueta) {
+          // Calcular novo número de envio
+          const envioNumero = (label.envioNumero || 1) + 1;
+          const enviosTotal = (label.enviosTotal || 1) + 1;
+
+          // 2. SALVAR NO FIREBASE
+          await saveLabel(
+            label.transactionId,
+            result.etiqueta,
+            dest.nome,
+            envioNumero,
+            enviosTotal,
+            label.mergedTransactionIds,
+            label.produtos,
+            `Reenvio da etiqueta ${label.etiqueta}`,
+            label.productName,
+            reenvioServico,
+            dest.cep,
+            dest
+          );
+
+          novasEtiquetas.push(result.etiqueta);
+
+          // Preparar dados para webhook
+          etiquetasParaWebhook.push({
+            codigo: result.etiqueta,
+            transactionId: label.transactionId,
+            produto: label.productName || 'Reenvio',
+            dataPedido: new Date().toISOString().split('T')[0],
+            destinatario: {
+              nome: dest.nome,
+              telefone: dest.telefone || '',
+              email: dest.email || '',
+              logradouro: dest.logradouro || '',
+              numero: dest.numero || 'S/N',
+              complemento: dest.complemento || '',
+              bairro: dest.bairro || '',
+              cidade: dest.cidade || '',
+              uf: dest.uf || '',
+              cep: dest.cep?.replace(/\D/g, '') || '',
+            },
+            envioNumero,
+            enviosTotal,
+            isEnvioParcial: true,
+            observacaoEnvio: `Reenvio da etiqueta ${label.etiqueta}`,
+            isReenvio: true,
+            etiquetaOriginal: label.etiqueta,
+          });
+
+          successCount++;
+        } else {
+          console.error('Erro ao gerar reenvio:', result.error);
+          errorCount++;
+        }
+      } catch (err) {
+        console.error('Erro ao gerar reenvio:', err);
+        errorCount++;
+      }
+
+      // Delay entre gerações
+      if (i < selectedRecords.length - 1) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+
+    setReenvioProgress(prev => ({ ...prev, success: successCount, errors: errorCount }));
+
+    // 3. ENVIAR PARA N8N (WEBHOOK)
+    if (sendToN8n && etiquetasParaWebhook.length > 0) {
+      try {
+        const enviarParaClienteReal = !useTestCredentials && sendClientNotification && !clientPhoneOverride;
+        const webhookPayload = {
+          etiquetas: etiquetasParaWebhook,
+          etiquetasAdmin: etiquetasParaWebhook,
+          config: {
+            adminPhone,
+            clientPhoneOverride: clientPhoneOverride || undefined,
+            sendClientNotification: enviarParaClienteReal || (sendClientNotification && !!clientPhoneOverride),
+            ordemPrioridade: 'novos',
+            observacaoGeral: 'Reenvio de etiquetas',
+            useTestCredentials,
+            isReenvio: true,
+          }
+        };
+
+        await fetch('/api/webhook/etiquetas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(webhookPayload),
+        });
+        console.log('[Reenvio] Webhook enviado com sucesso');
+      } catch (e) {
+        console.error('[Reenvio] Erro ao enviar webhook:', e);
+      }
+    }
+
+    // 4. GERAR PDF DAS ETIQUETAS
+    if (novasEtiquetas.length > 0) {
+      try {
+        const response = await fetch('/api/vipp/imprimir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ etiquetas: novasEtiquetas }),
+        });
+
+        if (response.headers.get('content-type')?.includes('application/pdf')) {
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const dateStr = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+          const filename = `Reenvio_Etiquetas_${dateStr}.pdf`;
+
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          console.log('[Reenvio] PDF baixado com sucesso');
+        } else {
+          const result = await response.json();
+          if (result.downloadUrl) {
+            window.open(result.downloadUrl, '_blank');
+          }
+        }
+      } catch (err) {
+        console.error('[Reenvio] Erro ao gerar PDF:', err);
+      }
+    }
+
+    setIsGeneratingReenvio(false);
+
+    if (successCount > 0) {
+      alert(`Reenvio concluído!\n\n✅ ${successCount} etiqueta(s) gerada(s)\n${errorCount > 0 ? `❌ ${errorCount} erro(s)` : ''}\n\n📄 PDF baixado automaticamente\n📱 Webhook enviado para n8n\n\nNovas etiquetas: ${novasEtiquetas.join(', ')}`);
+
+      // Recarregar dados
+      await loadData();
+      setSelectedLabels(new Set());
+    } else {
+      alert('Nenhuma etiqueta foi gerada. Verifique os erros no console.');
+    }
+
+    setShowReenvioModal(false);
+  };
+
   // --- Busca Avulsa ---
   const handleSearchAvulso = async () => {
     if (!searchAvulsoCode.trim()) return;
@@ -487,13 +730,28 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
           </div>
 
           {selectedLabels.size > 0 && (
-            <button
-              onClick={handlePrintSelected}
-              disabled={isPrinting}
-              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-50 text-sm"
-            >
-              {isPrinting ? 'Gerando...' : `Imprimir (${selectedLabels.size})`}
-            </button>
+            <>
+              <button
+                onClick={handlePrintSelected}
+                disabled={isPrinting}
+                className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-50 text-sm"
+              >
+                {isPrinting ? 'Gerando...' : `Imprimir (${selectedLabels.size})`}
+              </button>
+
+              <button
+                onClick={handleOpenReenvioModal}
+                className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium transition-colors shadow-sm text-sm"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M17 1l4 4-4 4" />
+                  <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                  <path d="M7 23l-4-4 4-4" />
+                  <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                </svg>
+                Gerar Reenvio ({selectedLabels.size})
+              </button>
+            </>
           )}
           
           <button
@@ -650,9 +908,26 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-600 font-inter text-center">
-                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">
-                      {label.envioNumero || 1}/{label.enviosTotal || 1}
-                    </span>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs">
+                        {label.envioNumero || 1}/{label.enviosTotal || 1}
+                      </span>
+                      {label.destinatarioData ? (
+                        <span className="text-green-500" title="Pode gerar reenvio">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M20 6L9 17l-5-5" />
+                          </svg>
+                        </span>
+                      ) : (
+                        <span className="text-slate-300" title="Sem dados para reenvio">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="15" y1="9" x2="9" y2="15" />
+                            <line x1="9" y1="9" x2="15" y2="15" />
+                          </svg>
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
@@ -850,6 +1125,190 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                   <line x1="10" y1="14" x2="21" y2="3" />
                 </svg>
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE REENVIO */}
+      {showReenvioModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !isGeneratingReenvio && setShowReenvioModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-8 py-6 border-b border-slate-100 bg-orange-50">
+              <h3 className="text-lg font-semibold text-orange-800 font-public-sans flex items-center gap-2">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M17 1l4 4-4 4" />
+                  <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                  <path d="M7 23l-4-4 4-4" />
+                  <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                </svg>
+                Gerar Reenvio
+              </h3>
+              <p className="text-sm text-orange-600 mt-1">
+                {selectedLabels.size} etiqueta(s) selecionada(s) para reenvio
+              </p>
+            </div>
+
+            <div className="px-8 py-6">
+              {/* Aviso */}
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+                <p className="text-sm text-amber-800 font-medium flex items-start gap-2">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  Novas etiquetas serão geradas para os mesmos destinatários. As etiquetas originais continuarão no histórico.
+                </p>
+              </div>
+
+              {/* Seleção de Serviço */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Tipo de Envio
+                </label>
+                <select
+                  value={reenvioServico}
+                  onChange={(e) => setReenvioServico(e.target.value)}
+                  disabled={isGeneratingReenvio}
+                  className="w-full px-4 py-3 border border-slate-300 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:bg-slate-100"
+                >
+                  {SERVICOS_ECT.map(servico => (
+                    <option key={servico.code} value={servico.code}>
+                      {servico.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Lista de etiquetas selecionadas */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Etiquetas que serão reenviadas
+                </label>
+                <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
+                  {labels.filter(l => selectedLabels.has(l.etiqueta)).map(label => (
+                    <div key={label.etiqueta} className="px-4 py-2 text-sm flex justify-between items-center">
+                      <div>
+                        <span className="font-mono text-slate-600">{label.etiqueta}</span>
+                        <span className="text-slate-400 ml-2">→</span>
+                        <span className="text-slate-700 ml-2">{label.destinatario}</span>
+                      </div>
+                      {!label.destinatarioData && (
+                        <span className="text-xs text-red-500">Sem dados</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Progresso */}
+              {isGeneratingReenvio && (
+                <div className="mb-6 bg-slate-50 rounded-lg p-4">
+                  <div className="flex items-center justify-between text-sm text-slate-600 mb-2">
+                    <span>Gerando etiquetas...</span>
+                    <span>{reenvioProgress.current}/{reenvioProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-2">
+                    <div
+                      className="bg-orange-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${(reenvioProgress.current / reenvioProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-8 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => setShowReenvioModal(false)}
+                disabled={isGeneratingReenvio}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleGenerateReenvio}
+                disabled={isGeneratingReenvio}
+                className="px-6 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {isGeneratingReenvio ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Gerando...
+                  </>
+                ) : (
+                  'Confirmar Reenvio'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE AVISO - SEM DADOS DE ENDEREÇO */}
+      {showNoDataModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowNoDataModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+            {/* Header com ícone */}
+            <div className="px-8 py-6 bg-gradient-to-r from-red-50 to-orange-50 border-b border-red-100">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-red-800 font-public-sans">
+                    Reenvio não disponível
+                  </h3>
+                  <p className="text-sm text-red-600 mt-0.5">
+                    {noDataLabels.length} etiqueta{noDataLabels.length > 1 ? 's' : ''} sem dados de endereço
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Conteúdo */}
+            <div className="px-8 py-6">
+              <p className="text-slate-600 text-sm mb-4">
+                As etiquetas abaixo foram geradas antes da atualização do sistema e não possuem os dados do destinatário salvos. Por isso, não é possível gerar reenvio automático.
+              </p>
+
+              {/* Lista de etiquetas */}
+              <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 mb-4 max-h-32 overflow-y-auto">
+                <div className="flex flex-wrap gap-2">
+                  {noDataLabels.map(etiqueta => (
+                    <span key={etiqueta} className="inline-flex items-center px-2.5 py-1 bg-white border border-slate-200 rounded text-xs font-mono text-slate-600">
+                      {etiqueta}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dica */}
+              <div className="flex items-start gap-2 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v-4" />
+                  <path d="M12 8h.01" />
+                </svg>
+                <p className="text-xs text-blue-700">
+                  <strong>Dica:</strong> Para reenviar, importe novamente o CSV com os dados do cliente ou gere uma nova etiqueta manualmente pelo sistema de importação.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-8 py-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button
+                onClick={() => setShowNoDataModal(false)}
+                className="px-6 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-medium transition-colors text-sm"
+              >
+                Entendi
+              </button>
             </div>
           </div>
         </div>
