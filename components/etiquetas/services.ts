@@ -227,7 +227,11 @@ export async function saveLabel(
   service?: string,
   zip?: string,
   // Dados completos do destinatário (para permitir reenvio)
-  destinatarioData?: DestinatarioCompleto
+  destinatarioData?: DestinatarioCompleto,
+  // Controle de WhatsApp ao cliente
+  // Se true, marca whatsappEnviado: false (aguardando postagem)
+  // Se false/undefined, não adiciona o campo (etiqueta não precisa notificar cliente)
+  notificarCliente?: boolean
 ): Promise<void> {
   try {
     const docData: Record<string, unknown> = {
@@ -261,10 +265,42 @@ export async function saveLabel(
       docData.destinatarioData = destinatarioData;
     }
 
+    // Controle de WhatsApp ao cliente:
+    // Se notificarCliente=true, marca como pendente (será enviado após postagem)
+    if (notificarCliente) {
+      docData.whatsappEnviado = false;
+    }
+
     await addDoc(collection(db, 'etiquetas'), docData);
   } catch (err) {
     console.error('Erro ao salvar etiqueta:', err);
     // Não relançar erro para não quebrar fluxo principal, mas logar
+  }
+}
+
+// Marcar WhatsApp como enviado (ou com erro)
+export async function markWhatsappSent(
+  etiqueta: string,
+  success: boolean,
+  error?: string
+): Promise<void> {
+  try {
+    const q = query(collection(db, 'etiquetas'), where('etiqueta', '==', etiqueta));
+    const snapshot = await getDocs(q);
+
+    if (!snapshot.empty) {
+      const docRef = snapshot.docs[0].ref;
+      const updateData: Record<string, unknown> = {
+        whatsappEnviado: success,
+        whatsappEnviadoEm: Timestamp.now(),
+      };
+      if (error) {
+        updateData.whatsappErro = error;
+      }
+      await updateDoc(docRef, updateData);
+    }
+  } catch (err) {
+    console.error('Erro ao marcar WhatsApp como enviado:', err);
   }
 }
 

@@ -106,6 +106,13 @@ export interface EtiquetaRecord {
   trackingEvents?: TrackingEvent[]; // Histórico completo
   // Dados completos do destinatário (para reenvio)
   destinatarioData?: DestinatarioData;
+  // Controle de envio WhatsApp ao cliente
+  // null/undefined = etiqueta antiga (já notificada automaticamente)
+  // false = pendente (aguardando postagem para enviar)
+  // true = enviado
+  whatsappEnviado?: boolean | null;
+  whatsappEnviadoEm?: Timestamp;
+  whatsappErro?: string;
 }
 
 export interface TrackingEvent {

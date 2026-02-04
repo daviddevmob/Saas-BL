@@ -691,10 +691,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Preparar dados para o N8N
-    // - etiquetas: NOVAS com telefone (cliente recebe WhatsApp individual) - só se sendClientNotification=true
+    // - etiquetas: NOVAS com telefone (para referência do admin)
     // - todasEtiquetas: TODAS (admin recebe resumo + PDF consolidado)
+    // NOTA: O N8N envia apenas para o ADMIN. O envio ao CLIENTE é feito via handleSyncTracking após postagem.
 
-    // Se sendClientNotification=false, envia array vazio para não disparar WhatsApp aos clientes
     const etiquetasParaCliente = enviarWhatsappCliente ? etiquetasNovasComTelefone : [];
 
     if (!enviarWhatsappCliente && etiquetasNovasComTelefone.length > 0) {
@@ -765,18 +765,16 @@ export async function POST(request: NextRequest) {
       console.log('N8N_WEBHOOK_URL não configurado!');
     }
 
-    // Enviar WhatsApp para clientes via Evolution API (se habilitado)
+    // NOTA: O envio de WhatsApp ao cliente foi movido para o handleSyncTracking
+    // O WhatsApp só será enviado após o objeto ser postado nos Correios
+    // Isso evita envio duplicado (aqui + N8N) e garante que o cliente só receba
+    // a notificação quando o objeto realmente estiver em trânsito
     let whatsappClienteResultado = { enviados: 0, erros: 0 };
     if (EVOLUTION_CONFIG.useEvolution && enviarWhatsappCliente && etiquetasParaCliente.length > 0) {
-      console.log('\n========== ENVIANDO WHATSAPP CLIENTES (Evolution) ==========');
-      try {
-        whatsappClienteResultado = await enviarWhatsAppClientes(etiquetasParaCliente);
-      } catch (evolutionError) {
-        console.error('Erro ao enviar WhatsApp via Evolution:', evolutionError);
-      }
-      console.log('============================================================\n');
+      console.log('[WhatsApp Cliente] Envio adiado - será enviado após confirmação de postagem');
+      console.log(`[WhatsApp Cliente] ${etiquetasParaCliente.length} etiqueta(s) marcadas como pendentes no Firebase`);
     } else if (!EVOLUTION_CONFIG.useEvolution) {
-      console.log('[WhatsApp Cliente] WHATSAPP_USE_EVOLUTION=false, deixando N8N enviar');
+      console.log('[WhatsApp Cliente] WHATSAPP_USE_EVOLUTION=false');
     } else if (!enviarWhatsappCliente) {
       console.log('[WhatsApp Cliente] Notificação ao cliente desabilitada');
     }

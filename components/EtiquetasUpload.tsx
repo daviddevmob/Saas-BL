@@ -983,7 +983,10 @@ export default function EtiquetasUpload() {
                 cidade: sale.city,
                 uf: sale.state,
                 cep: sale.zip?.replace(/\D/g, '') || '',
-              }
+              },
+              // Controle de WhatsApp: se notificação ao cliente está habilitada,
+              // marca como pendente (será enviado após postagem nos Correios)
+              sendClientNotification
             );
 
             etiquetasNovas.push({

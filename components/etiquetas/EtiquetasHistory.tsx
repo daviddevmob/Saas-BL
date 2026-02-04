@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { EtiquetaRecord, TrackingEvent } from './types';
-import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId, saveLabel, loadEtiquetasSettings } from './services';
+import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId, saveLabel, loadEtiquetasSettings, markWhatsappSent } from './services';
 import { formatDateBR, formatPhone } from './utils';
 import { SERVICOS_ECT, DEFAULT_SERVICO_ECT } from './constants';
 import { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
@@ -79,6 +79,55 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
     loadData();
     return () => { stopSyncRef.current = true; }; // Cleanup
   }, []);
+
+  // Verifica se o status indica que o objeto foi postado nos Correios
+  const isStatusPostado = (status: string): boolean => {
+    if (!status) return false;
+    const s = status.toLowerCase();
+    // Se tem status e NÃO está aguardando postagem, considera postado
+    return s.length > 0 && !s.includes('aguardando') && !s.includes('não encontrado') && !s.includes('objeto não encontrado');
+  };
+
+  // Função para enviar WhatsApp ao cliente via API
+  const enviarWhatsAppCliente = async (label: EtiquetaRecord): Promise<{ success: boolean; error?: string }> => {
+    if (!label.destinatarioData?.telefone) {
+      return { success: false, error: 'Sem telefone' };
+    }
+
+    try {
+      // Montar mensagem para o cliente
+      const dest = label.destinatarioData;
+      const enderecoParts = [dest.logradouro, dest.numero, dest.complemento].filter(Boolean).join(', ');
+      const enderecoCompleto = `${enderecoParts} — ${dest.cidade}, ${dest.uf} CEP ${dest.cep}`;
+
+      let mensagem = `${dest.nome}, seu pedido foi atualizado.\n\n`;
+      mensagem += `📦 Código de rastreio dos Correios: ${label.etiqueta}\n\n`;
+      mensagem += `📍 Endereço de envio: ${enderecoCompleto}\n\n`;
+      mensagem += `🔗 Acompanhe: https://rastreamento.correios.com.br/`;
+
+      // Enviar via API interna que usa Evolution
+      const response = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telefone: dest.telefone,
+          mensagem,
+        }),
+      });
+
+      if (response.ok) {
+        console.log(`[WhatsApp] Mensagem enviada para ${dest.nome} (${label.etiqueta})`);
+        return { success: true };
+      } else {
+        const errorData = await response.json();
+        return { success: false, error: errorData.error || 'Erro ao enviar' };
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido';
+      console.error('[WhatsApp] Erro ao enviar:', errorMsg);
+      return { success: false, error: errorMsg };
+    }
+  };
 
   const loadData = async (loadMore = false) => {
     if (!loadMore) setLoading(true);
@@ -318,6 +367,26 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
               ));
               // Salvar no Firebase
               await updateLabelTrackingStatus(codigo, status, eventos);
+
+              // Verificar se deve enviar WhatsApp ao cliente
+              // Buscar etiqueta original do batch para verificar whatsappEnviado
+              const labelOriginal = batch.find(l => l.etiqueta === codigo);
+              if (
+                labelOriginal?.whatsappEnviado === false &&  // Pendente
+                labelOriginal?.destinatarioData?.telefone &&  // Tem telefone
+                isStatusPostado(status)                       // Foi postado
+              ) {
+                console.log(`[WhatsApp] Etiqueta ${codigo} postada, enviando notificação ao cliente...`);
+                const result = await enviarWhatsAppCliente(labelOriginal);
+                await markWhatsappSent(codigo, result.success, result.error);
+
+                // Atualizar estado local com o status do WhatsApp
+                setLabels(prev => prev.map(l =>
+                  l.etiqueta === codigo
+                    ? { ...l, whatsappEnviado: result.success, whatsappErro: result.error }
+                    : l
+                ));
+              }
             }
 
             processedCount++;
@@ -454,7 +523,9 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
             label.productName,
             reenvioServico,
             dest.cep,
-            dest
+            dest,
+            // Notificar cliente se a configuração estiver habilitada
+            sendClientNotification
           );
 
           novasEtiquetas.push(result.etiqueta);
@@ -838,6 +909,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
               <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider font-inter">Etiqueta</th>
               <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider font-inter">Destinatário</th>
               <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider font-inter">Status Entrega</th>
+              <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider font-inter text-center">WhatsApp</th>
               <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider font-inter text-center">Envio</th>
               <th className="px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider font-inter text-right">Ações</th>
             </tr>
@@ -845,7 +917,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
           <tbody className="divide-y divide-slate-100">
             {loading && labels.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                   <div className="flex justify-center items-center gap-2">
                     <div className="w-4 h-4 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin"></div>
                     Carregando...
@@ -854,7 +926,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
               </tr>
             ) : filteredLabels.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500 font-inter">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-500 font-inter">
                   Nenhuma etiqueta encontrada.
                 </td>
               </tr>
@@ -905,6 +977,53 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                       </span>
                     ) : (
                       <span className="text-slate-400 text-xs">-</span>
+                    )}
+                  </td>
+                  {/* Coluna WhatsApp - Indicador visual do status de notificação ao cliente */}
+                  <td className="px-4 py-3 text-center">
+                    {label.whatsappEnviado === undefined ? (
+                      // Etiqueta antiga - enviado automaticamente pelo sistema antigo
+                      <span
+                        className="inline-flex items-center gap-1 text-slate-400"
+                        title="Enviado automaticamente (etiqueta antiga)"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                      </span>
+                    ) : label.whatsappEnviado === false ? (
+                      // Pendente - aguardando postagem
+                      <span
+                        className="inline-flex items-center gap-1 text-amber-500"
+                        title="Aguardando postagem para enviar"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10" />
+                          <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                      </span>
+                    ) : label.whatsappErro ? (
+                      // Erro ao enviar
+                      <span
+                        className="inline-flex items-center gap-1 text-red-500"
+                        title={`Erro: ${label.whatsappErro}`}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="15" y1="9" x2="9" y2="15" />
+                          <line x1="9" y1="9" x2="15" y2="15" />
+                        </svg>
+                      </span>
+                    ) : (
+                      // Enviado com sucesso
+                      <span
+                        className="inline-flex items-center gap-1 text-green-500"
+                        title={label.whatsappEnviadoEm ? `Enviado em ${formatDateBR(label.whatsappEnviadoEm.toDate().toISOString())}` : 'Enviado'}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      </span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-600 font-inter text-center">
