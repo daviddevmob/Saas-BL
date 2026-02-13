@@ -55,7 +55,6 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
   // Configurações do sistema
   const [useTestCredentials, setUseTestCredentials] = useState(false);
   const [sendToN8n, setSendToN8n] = useState(true);
-  const [sendClientNotification, setSendClientNotification] = useState(false);
   const [adminPhone, setAdminPhone] = useState('5585987080090');
   const [clientPhoneOverride, setClientPhoneOverride] = useState('');
 
@@ -66,7 +65,6 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
       if (settings) {
         setUseTestCredentials(settings.useTestCredentials || false);
         setSendToN8n(settings.sendToN8n !== false);
-        setSendClientNotification(settings.sendClientNotification || false);
         setAdminPhone(settings.adminPhone || '5585987080090');
         setClientPhoneOverride(settings.clientPhoneOverride || '');
       }
@@ -88,15 +86,36 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
     return s.length > 0 && !s.includes('aguardando') && !s.includes('não encontrado') && !s.includes('objeto não encontrado');
   };
 
+  // Normaliza telefone para formato WhatsApp BR (5511999999999)
+  // Retorna string limpa ou null se inválido
+  const normalizarTelefoneBR = (telefone: string | undefined): string | null => {
+    if (!telefone) return null;
+    const digits = telefone.replace(/\D/g, '');
+    if (digits.length === 0) return null;
+
+    // 11 dígitos (DDD + 9 dígitos) → adiciona 55
+    if (digits.length === 11 && digits[2] === '9') return `55${digits}`;
+    // 13 dígitos já com 55 + DDD + 9 dígitos
+    if (digits.length === 13 && digits.startsWith('55') && digits[4] === '9') return digits;
+    // 10 dígitos (DDD + 8 dígitos fixo) → não é celular WhatsApp
+    if (digits.length === 10) return null;
+    // 12 dígitos (55 + DDD + 8 dígitos) → fixo, não é WhatsApp
+    if (digits.length === 12 && digits.startsWith('55')) return null;
+
+    // Qualquer outro formato → inválido para WhatsApp BR
+    return null;
+  };
+
   // Função para enviar WhatsApp ao cliente via API
   const enviarWhatsAppCliente = async (label: EtiquetaRecord): Promise<{ success: boolean; error?: string }> => {
-    if (!label.destinatarioData?.telefone) {
-      return { success: false, error: 'Sem telefone' };
+    const telefoneNormalizado = normalizarTelefoneBR(label.destinatarioData?.telefone);
+    if (!telefoneNormalizado) {
+      const raw = label.destinatarioData?.telefone || '(vazio)';
+      return { success: false, error: `Telefone inválido: ${raw}` };
     }
 
     try {
-      // Montar mensagem para o cliente
-      const dest = label.destinatarioData;
+      const dest = label.destinatarioData!;
       const enderecoParts = [dest.logradouro, dest.numero, dest.complemento].filter(Boolean).join(', ');
       const enderecoCompleto = `${enderecoParts} — ${dest.cidade}, ${dest.uf} CEP ${dest.cep}`;
 
@@ -105,22 +124,21 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
       mensagem += `📍 Endereço de envio: ${enderecoCompleto}\n\n`;
       mensagem += `🔗 Acompanhe: https://rastreamento.correios.com.br/`;
 
-      // Enviar via API interna que usa Evolution
       const response = await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          telefone: dest.telefone,
+          telefone: telefoneNormalizado,
           mensagem,
         }),
       });
 
       if (response.ok) {
-        console.log(`[WhatsApp] Mensagem enviada para ${dest.nome} (${label.etiqueta})`);
+        console.log(`[WhatsApp] Enviado para ${dest.nome} (${telefoneNormalizado}) - ${label.etiqueta}`);
         return { success: true };
       } else {
-        const errorData = await response.json();
-        return { success: false, error: errorData.error || 'Erro ao enviar' };
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        return { success: false, error: errorData.error || `HTTP ${response.status}` };
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido';
@@ -368,24 +386,34 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
               // Salvar no Firebase
               await updateLabelTrackingStatus(codigo, status, eventos);
 
-              // Verificar se deve enviar WhatsApp ao cliente
-              // Buscar etiqueta original do batch para verificar whatsappEnviado
+              // Verificar se deve enviar WhatsApp ao cliente (automático quando postado)
               const labelOriginal = batch.find(l => l.etiqueta === codigo);
               if (
-                labelOriginal?.whatsappEnviado === false &&  // Pendente
-                labelOriginal?.destinatarioData?.telefone &&  // Tem telefone
-                isStatusPostado(status)                       // Foi postado
+                labelOriginal?.whatsappEnviado === false &&
+                isStatusPostado(status)
               ) {
-                console.log(`[WhatsApp] Etiqueta ${codigo} postada, enviando notificação ao cliente...`);
-                const result = await enviarWhatsAppCliente(labelOriginal);
-                await markWhatsappSent(codigo, result.success, result.error);
-
-                // Atualizar estado local com o status do WhatsApp
-                setLabels(prev => prev.map(l =>
-                  l.etiqueta === codigo
-                    ? { ...l, whatsappEnviado: result.success, whatsappErro: result.error }
-                    : l
-                ));
+                const telefoneNorm = normalizarTelefoneBR(labelOriginal.destinatarioData?.telefone);
+                if (!telefoneNorm) {
+                  // Telefone inválido/vazio → marca como erro no Firebase e segue
+                  const raw = labelOriginal.destinatarioData?.telefone || '(vazio)';
+                  const erro = `Telefone inválido: ${raw}`;
+                  console.warn(`[WhatsApp] ${codigo} — ${erro}, pulando envio`);
+                  await markWhatsappSent(codigo, false, erro);
+                  setLabels(prev => prev.map(l =>
+                    l.etiqueta === codigo
+                      ? { ...l, whatsappEnviado: false, whatsappErro: erro }
+                      : l
+                  ));
+                } else {
+                  console.log(`[WhatsApp] Etiqueta ${codigo} postada, enviando para ${telefoneNorm}...`);
+                  const result = await enviarWhatsAppCliente(labelOriginal);
+                  await markWhatsappSent(codigo, result.success, result.error);
+                  setLabels(prev => prev.map(l =>
+                    l.etiqueta === codigo
+                      ? { ...l, whatsappEnviado: result.success, whatsappErro: result.error }
+                      : l
+                  ));
+                }
               }
             }
 
@@ -523,9 +551,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
             label.productName,
             reenvioServico,
             dest.cep,
-            dest,
-            // Notificar cliente se a configuração estiver habilitada
-            sendClientNotification
+            dest
           );
 
           novasEtiquetas.push(result.etiqueta);
@@ -577,14 +603,13 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
     // 3. ENVIAR PARA N8N (WEBHOOK)
     if (sendToN8n && etiquetasParaWebhook.length > 0) {
       try {
-        const enviarParaClienteReal = !useTestCredentials && sendClientNotification && !clientPhoneOverride;
         const webhookPayload = {
           etiquetas: etiquetasParaWebhook,
           etiquetasAdmin: etiquetasParaWebhook,
           config: {
             adminPhone,
             clientPhoneOverride: clientPhoneOverride || undefined,
-            sendClientNotification: enviarParaClienteReal || (sendClientNotification && !!clientPhoneOverride),
+            sendClientNotification: false,
             ordemPrioridade: 'novos',
             observacaoGeral: 'Reenvio de etiquetas',
             useTestCredentials,

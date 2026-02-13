@@ -109,7 +109,6 @@ export default function EtiquetasUpload() {
   // Estados para configurações gerais
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [sendToN8n, setSendToN8n] = useState(true);
-  const [sendClientNotification, setSendClientNotification] = useState(false);
   const [useTestCredentials, setUseTestCredentials] = useState(false);
   const [adminPhone, setAdminPhone] = useState('5585987080090');
   const [clientPhoneOverride, setClientPhoneOverride] = useState('');
@@ -139,7 +138,6 @@ export default function EtiquetasUpload() {
         setAdminPhone(settings.adminPhone || '5585987080090');
         setClientPhoneOverride(settings.clientPhoneOverride || '');
         setSendToN8n(settings.sendToN8n !== false); // default true
-        setSendClientNotification(settings.sendClientNotification || false);
         setUseTestCredentials(settings.useTestCredentials || false);
       }
     };
@@ -162,13 +160,12 @@ export default function EtiquetasUpload() {
       adminPhone,
       clientPhoneOverride,
       sendToN8n,
-      sendClientNotification,
       useTestCredentials,
     });
   };
 
   const needsProductionConfirm = !useTestCredentials;
-  const needsClientConfirm = sendClientNotification && sendToN8n && !clientPhoneOverride;
+  const needsClientConfirm = false;
 
   // Carregar mapeamento salvo do localStorage
   useEffect(() => {
@@ -983,10 +980,7 @@ export default function EtiquetasUpload() {
                 cidade: sale.city,
                 uf: sale.state,
                 cep: sale.zip?.replace(/\D/g, '') || '',
-              },
-              // Controle de WhatsApp: se notificação ao cliente está habilitada,
-              // marca como pendente (será enviado após postagem nos Correios)
-              sendClientNotification
+              }
             );
 
             etiquetasNovas.push({
@@ -1053,14 +1047,13 @@ export default function EtiquetasUpload() {
     // Webhook (Simplificado para o exemplo, mas mantendo a lógica de envio)
     if (sendToN8n && (etiquetasNovas.length > 0 || etiquetasJaGeradas.length > 0)) {
         try {
-            const enviarParaClienteReal = !useTestCredentials && sendClientNotification && !clientPhoneOverride;
             const webhookPayload = {
                 etiquetas: etiquetasNovas,
                 etiquetasAdmin: [...etiquetasNovas, ...etiquetasJaGeradas], // Simplified combination
                 config: {
                     adminPhone,
                     clientPhoneOverride: clientPhoneOverride || undefined,
-                    sendClientNotification: enviarParaClienteReal || (sendClientNotification && !!clientPhoneOverride),
+                    sendClientNotification: false,
                     ordemPrioridade: ordem,
                     observacaoGeral: obsGeral || undefined,
                     useTestCredentials,
@@ -1233,8 +1226,6 @@ export default function EtiquetasUpload() {
           setUseTestCredentials={setUseTestCredentials}
           sendToN8n={sendToN8n}
           setSendToN8n={setSendToN8n}
-          sendClientNotification={sendClientNotification}
-          setSendClientNotification={setSendClientNotification}
           adminPhone={adminPhone}
           setAdminPhone={setAdminPhone}
           clientPhoneOverride={clientPhoneOverride}
@@ -1470,8 +1461,6 @@ export default function EtiquetasUpload() {
         setUseTestCredentials={setUseTestCredentials}
         sendToN8n={sendToN8n}
         setSendToN8n={setSendToN8n}
-        sendClientNotification={sendClientNotification}
-        setSendClientNotification={setSendClientNotification}
         adminPhone={adminPhone}
         setAdminPhone={setAdminPhone}
         clientPhoneOverride={clientPhoneOverride}
@@ -1527,7 +1516,6 @@ export default function EtiquetasUpload() {
         setEnvioObservacoes={setEnvioObservacoes}
         pendingGeneration={pendingGeneration}
         sendToN8n={sendToN8n}
-        sendClientNotification={sendClientNotification}
         clientPhoneOverride={clientPhoneOverride}
         isConfirmationValid={isConfirmationValid}
       />

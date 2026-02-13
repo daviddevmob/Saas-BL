@@ -136,7 +136,6 @@ export interface EtiquetasSettings {
   adminPhone: string;
   clientPhoneOverride: string;
   sendToN8n: boolean;
-  sendClientNotification: boolean;
   useTestCredentials: boolean;
   updatedAt?: Timestamp;
 }

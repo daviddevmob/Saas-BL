@@ -228,10 +228,6 @@ export async function saveLabel(
   zip?: string,
   // Dados completos do destinatário (para permitir reenvio)
   destinatarioData?: DestinatarioCompleto,
-  // Controle de WhatsApp ao cliente
-  // Se true, marca whatsappEnviado: false (aguardando postagem)
-  // Se false/undefined, não adiciona o campo (etiqueta não precisa notificar cliente)
-  notificarCliente?: boolean
 ): Promise<void> {
   try {
     const docData: Record<string, unknown> = {
@@ -265,11 +261,9 @@ export async function saveLabel(
       docData.destinatarioData = destinatarioData;
     }
 
-    // Controle de WhatsApp ao cliente:
-    // Se notificarCliente=true, marca como pendente (será enviado após postagem)
-    if (notificarCliente) {
-      docData.whatsappEnviado = false;
-    }
+    // Todas as etiquetas novas começam com whatsappEnviado: false (pendente).
+    // O envio real do WhatsApp é feito automaticamente no handleSyncTracking() quando o rastreio indica postagem.
+    docData.whatsappEnviado = false;
 
     await addDoc(collection(db, 'etiquetas'), docData);
   } catch (err) {

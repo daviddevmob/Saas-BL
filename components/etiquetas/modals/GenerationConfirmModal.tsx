@@ -25,7 +25,6 @@ interface GenerationConfirmModalProps {
   pendingGeneration: PhysicalSale[];
   // Status
   sendToN8n: boolean;
-  sendClientNotification: boolean;
   clientPhoneOverride: string;
   isConfirmationValid: () => boolean;
 }
@@ -48,7 +47,6 @@ export default function GenerationConfirmModal({
   setEnvioObservacoes,
   pendingGeneration,
   sendToN8n,
-  sendClientNotification,
   clientPhoneOverride,
   isConfirmationValid,
 }: GenerationConfirmModalProps) {
@@ -294,7 +292,6 @@ export default function GenerationConfirmModal({
           <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
             <strong>{pendingGeneration.length}</strong> etiqueta(s) serão geradas
             {sendToN8n && <span> • Webhook ativo</span>}
-            {sendClientNotification && clientPhoneOverride && <span> • Teste: {clientPhoneOverride}</span>}
           </p>
         </div>
 

@@ -9,8 +9,6 @@ interface ConfigModalProps {
   setUseTestCredentials: (value: boolean) => void;
   sendToN8n: boolean;
   setSendToN8n: (value: boolean) => void;
-  sendClientNotification: boolean;
-  setSendClientNotification: (value: boolean) => void;
   adminPhone: string;
   setAdminPhone: (value: string) => void;
   clientPhoneOverride: string;
@@ -27,8 +25,6 @@ export default function ConfigModal({
   setUseTestCredentials,
   sendToN8n,
   setSendToN8n,
-  sendClientNotification,
-  setSendClientNotification,
   adminPhone,
   setAdminPhone,
   clientPhoneOverride,
@@ -195,48 +191,6 @@ export default function ConfigModal({
                   height: '18px',
                   width: '18px',
                   left: sendToN8n ? '27px' : '3px',
-                  bottom: '3px',
-                  backgroundColor: '#FFF',
-                  borderRadius: '50%',
-                  transition: '0.3s',
-                }} />
-              </span>
-            </label>
-          </div>
-        </div>
-
-        {/* Toggle: Notificar Cliente */}
-        <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: sendClientNotification ? '#EFF6FF' : '#F8FAFC', borderRadius: '0.75rem', border: sendClientNotification ? '1px solid #93C5FD' : '1px solid #E2E8F0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <p style={{ margin: 0, fontFamily: 'var(--font-inter)', fontSize: '0.875rem', fontWeight: 600, color: '#1E293B' }}>
-                📱 Notificar Cliente (WhatsApp)
-              </p>
-              <p style={{ margin: '0.25rem 0 0 0', fontFamily: 'var(--font-inter)', fontSize: '0.75rem', color: '#64748B' }}>
-                Envia código de rastreio para o cliente via Evolution
-              </p>
-            </div>
-            <label style={{ position: 'relative', display: 'inline-block', width: '48px', height: '24px' }}>
-              <input
-                type="checkbox"
-                checked={sendClientNotification}
-                onChange={(e) => setSendClientNotification(e.target.checked)}
-                style={{ opacity: 0, width: 0, height: 0 }}
-              />
-              <span style={{
-                position: 'absolute',
-                cursor: 'pointer',
-                top: 0, left: 0, right: 0, bottom: 0,
-                backgroundColor: sendClientNotification ? '#3B82F6' : '#CBD5E1',
-                borderRadius: '24px',
-                transition: '0.3s',
-              }}>
-                <span style={{
-                  position: 'absolute',
-                  content: '""',
-                  height: '18px',
-                  width: '18px',
-                  left: sendClientNotification ? '27px' : '3px',
                   bottom: '3px',
                   backgroundColor: '#FFF',
                   borderRadius: '50%',
