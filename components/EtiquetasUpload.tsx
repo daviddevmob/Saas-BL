@@ -1516,7 +1516,6 @@ export default function EtiquetasUpload() {
         setEnvioObservacoes={setEnvioObservacoes}
         pendingGeneration={pendingGeneration}
         sendToN8n={sendToN8n}
-        clientPhoneOverride={clientPhoneOverride}
         isConfirmationValid={isConfirmationValid}
       />
 

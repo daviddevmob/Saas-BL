@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { EtiquetaRecord, TrackingEvent } from './types';
-import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId, saveLabel, loadEtiquetasSettings, markWhatsappSent } from './services';
+import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId, saveLabel, loadEtiquetasSettings, markWhatsappSent, markRetiradaNotificado } from './services';
 import { formatDateBR, formatPhone } from './utils';
 import { SERVICOS_ECT, DEFAULT_SERVICO_ECT } from './constants';
 import { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
@@ -51,6 +51,13 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
   // Modal de aviso (sem dados de endereço)
   const [showNoDataModal, setShowNoDataModal] = useState(false);
   const [noDataLabels, setNoDataLabels] = useState<string[]>([]);
+
+  // Estado para Modal de Retirada (WhatsApp)
+  const [showRetiradaModal, setShowRetiradaModal] = useState(false);
+  const [retiradaLabel, setRetiradaLabel] = useState<EtiquetaRecord | null>(null);
+  const [retiradaMensagem, setRetiradaMensagem] = useState('');
+  const [isSendingRetirada, setIsSendingRetirada] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   // Configurações do sistema
   const [useTestCredentials, setUseTestCredentials] = useState(false);
@@ -106,6 +113,60 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
     return null;
   };
 
+  // Verifica se o status indica "aguardando retirada"
+  const isAguardandoRetirada = (status: string): boolean => {
+    return !!status && status.toLowerCase().includes('aguardando retirada');
+  };
+
+  // Conta tentativas de entrega frustradas nos eventos de rastreio
+  const contarTentativasEntrega = (events: TrackingEvent[] | undefined): number => {
+    if (!events) return 0;
+    return events.filter(e => {
+      const s = e.status.toLowerCase();
+      return s.includes('não foi possível') || s.includes('tentativa de entrega') || s.includes('carteiro não atendido') || s.includes('ausente');
+    }).length;
+  };
+
+  // Monta mensagem de retirada nos Correios
+  const buildMensagemRetirada = (label: EtiquetaRecord): string => {
+    const dest = label.destinatarioData;
+    const nome = dest?.nome || label.destinatario;
+    const etiqueta = label.etiqueta;
+    const evento = label.trackingEvents?.find(e => e.status.toLowerCase().includes('aguardando retirada'));
+    const local = evento?.local || '';
+    const tentativas = contarTentativasEntrega(label.trackingEvents);
+    const tentativasText = tentativas > 0
+      ? `Foram realizadas ${tentativas} tentativa(s) de entrega no seu endereço, mas sem sucesso.`
+      : 'Foram realizadas tentativas de entrega no seu endereço, mas sem sucesso.';
+
+    return `Olá ${nome}!\n\n` +
+      `${tentativasText} Com isso, seu pacote está aguardando retirada nos Correios.\n\n` +
+      `📋 Código de rastreio: ${etiqueta}\n` +
+      `📍 Local para retirada: ${local}\n\n` +
+      `Para retirá-lo, é preciso informar o código do objeto e apresentar documentação que comprove ser o destinatário ou pessoa por ele oficialmente autorizada.\n\n` +
+      `🔗 Acompanhe: https://rastreamento.correios.com.br/app/index.php?objeto=${etiqueta}`;
+  };
+
+  // Envia mensagem genérica de WhatsApp para um telefone
+  const enviarWhatsAppMensagem = async (telefone: string, mensagem: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const response = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telefone, mensagem }),
+      });
+      if (response.ok) {
+        return { success: true };
+      } else {
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        return { success: false, error: errorData.error || `HTTP ${response.status}` };
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido';
+      return { success: false, error: errorMsg };
+    }
+  };
+
   // Função para enviar WhatsApp ao cliente via API
   const enviarWhatsAppCliente = async (label: EtiquetaRecord): Promise<{ success: boolean; error?: string }> => {
     const telefoneNormalizado = normalizarTelefoneBR(label.destinatarioData?.telefone);
@@ -144,6 +205,64 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
       const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido';
       console.error('[WhatsApp] Erro ao enviar:', errorMsg);
       return { success: false, error: errorMsg };
+    }
+  };
+
+  // Abrir modal de retirada para envio manual
+  const openRetiradaModal = (label: EtiquetaRecord) => {
+    const labelComEventos = label;
+    setRetiradaLabel(labelComEventos);
+    setRetiradaMensagem(buildMensagemRetirada(labelComEventos));
+    setShowRetiradaModal(true);
+    setCopiedField(null);
+  };
+
+  // Copiar texto para clipboard
+  const copyToClipboard = async (text: string, fieldName: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch {
+      // Fallback
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 2000);
+    }
+  };
+
+  // Enviar mensagem de retirada manualmente
+  const handleSendRetirada = async () => {
+    if (!retiradaLabel) return;
+    setIsSendingRetirada(true);
+
+    const telefone = normalizarTelefoneBR(retiradaLabel.destinatarioData?.telefone);
+    if (!telefone) {
+      alert('Telefone do destinatário inválido para WhatsApp.');
+      setIsSendingRetirada(false);
+      return;
+    }
+
+    const result = await enviarWhatsAppMensagem(telefone, retiradaMensagem);
+    await markRetiradaNotificado(retiradaLabel.etiqueta, result.success, result.error);
+
+    setLabels(prev => prev.map(l =>
+      l.etiqueta === retiradaLabel.etiqueta
+        ? { ...l, retiradaNotificado: result.success, retiradaErro: result.error }
+        : l
+    ));
+
+    setIsSendingRetirada(false);
+
+    if (result.success) {
+      setShowRetiradaModal(false);
+    } else {
+      alert(`Erro ao enviar: ${result.error || 'Erro desconhecido'}`);
     }
   };
 
@@ -411,6 +530,42 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                   setLabels(prev => prev.map(l =>
                     l.etiqueta === codigo
                       ? { ...l, whatsappEnviado: result.success, whatsappErro: result.error }
+                      : l
+                  ));
+                }
+              }
+
+              // Verificar se deve enviar notificação de retirada (automático)
+              // Só para etiquetas criadas a partir de 12/02/2026
+              const DATA_CORTE_RETIRADA = new Date('2026-02-12T00:00:00');
+              const labelCriadaEm = labelOriginal?.createdAt?.toDate?.();
+              const isEtiquetaRecente = labelCriadaEm && labelCriadaEm >= DATA_CORTE_RETIRADA;
+              if (
+                labelOriginal &&
+                isEtiquetaRecente &&
+                !labelOriginal.retiradaNotificado &&
+                isAguardandoRetirada(status)
+              ) {
+                const labelComEventos = { ...labelOriginal, trackingEvents: eventos, trackingStatus: status };
+                const telefoneNorm = normalizarTelefoneBR(labelOriginal.destinatarioData?.telefone);
+                if (!telefoneNorm) {
+                  const raw = labelOriginal.destinatarioData?.telefone || '(vazio)';
+                  const erro = `Telefone inválido: ${raw}`;
+                  console.warn(`[Retirada] ${codigo} — ${erro}, pulando envio`);
+                  await markRetiradaNotificado(codigo, false, erro);
+                  setLabels(prev => prev.map(l =>
+                    l.etiqueta === codigo
+                      ? { ...l, retiradaNotificado: false, retiradaErro: erro }
+                      : l
+                  ));
+                } else {
+                  const mensagem = buildMensagemRetirada(labelComEventos);
+                  console.log(`[Retirada] Etiqueta ${codigo} aguardando retirada, enviando para ${telefoneNorm}...`);
+                  const result = await enviarWhatsAppMensagem(telefoneNorm, mensagem);
+                  await markRetiradaNotificado(codigo, result.success, result.error);
+                  setLabels(prev => prev.map(l =>
+                    l.etiqueta === codigo
+                      ? { ...l, retiradaNotificado: result.success, retiradaErro: result.error }
                       : l
                   ));
                 }
@@ -991,15 +1146,34 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                         Atualizando...
                       </span>
                     ) : label.trackingStatus ? (
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        label.trackingStatus.toLowerCase().includes('entregue')
-                          ? 'bg-green-100 text-green-700'
-                          : label.trackingStatus.toLowerCase().includes('aguardando')
-                          ? 'bg-slate-100 text-slate-600'
-                          : 'bg-blue-100 text-blue-700'
-                      }`}>
-                        {label.trackingStatus}
-                      </span>
+                      isAguardandoRetirada(label.trackingStatus) ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openRetiradaModal(label); }}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                            label.retiradaNotificado
+                              ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                              : label.retiradaErro
+                              ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                              : 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+                          } cursor-pointer`}
+                          title="Clique para notificar o cliente sobre a retirada"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                          </svg>
+                          Aguard. retirada
+                        </button>
+                      ) : (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          label.trackingStatus.toLowerCase().includes('entregue')
+                            ? 'bg-green-100 text-green-700'
+                            : label.trackingStatus.toLowerCase().includes('aguardando')
+                            ? 'bg-slate-100 text-slate-600'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {label.trackingStatus}
+                        </span>
+                      )
                     ) : (
                       <span className="text-slate-400 text-xs">-</span>
                     )}
@@ -1016,19 +1190,18 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                         </svg>
                       </span>
-                    ) : label.whatsappEnviado === false ? (
-                      // Pendente - aguardando postagem
+                    ) : label.whatsappEnviado === true ? (
+                      // Enviado com sucesso (prioridade sobre whatsappErro residual)
                       <span
-                        className="inline-flex items-center gap-1 text-amber-500"
-                        title="Aguardando postagem para enviar"
+                        className="inline-flex items-center gap-1 text-green-500"
+                        title={label.whatsappEnviadoEm ? `Enviado em ${formatDateBR(label.whatsappEnviadoEm.toDate().toISOString())}` : 'Enviado'}
                       >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="10" />
-                          <polyline points="12 6 12 12 16 14" />
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M20 6L9 17l-5-5" />
                         </svg>
                       </span>
                     ) : label.whatsappErro ? (
-                      // Erro ao enviar
+                      // Erro ao enviar (whatsappEnviado === false + tem erro)
                       <span
                         className="inline-flex items-center gap-1 text-red-500"
                         title={`Erro: ${label.whatsappErro}`}
@@ -1040,13 +1213,14 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
                         </svg>
                       </span>
                     ) : (
-                      // Enviado com sucesso
+                      // Pendente - aguardando postagem (whatsappEnviado === false, sem erro)
                       <span
-                        className="inline-flex items-center gap-1 text-green-500"
-                        title={label.whatsappEnviadoEm ? `Enviado em ${formatDateBR(label.whatsappEnviadoEm.toDate().toISOString())}` : 'Enviado'}
+                        className="inline-flex items-center gap-1 text-amber-500"
+                        title="Aguardando postagem para enviar"
                       >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                          <path d="M20 6L9 17l-5-5" />
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10" />
+                          <polyline points="12 6 12 12 16 14" />
                         </svg>
                       </span>
                     )}
@@ -1457,6 +1631,238 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
           </div>
         </div>
       )}
+
+      {/* MODAL DE NOTIFICAÇÃO DE RETIRADA */}
+      {showRetiradaModal && retiradaLabel && (() => {
+        const dest = retiradaLabel.destinatarioData;
+        const nome = dest?.nome || retiradaLabel.destinatario;
+        const telefone = dest?.telefone || '';
+        const telefoneNorm = normalizarTelefoneBR(telefone);
+        const enderecoParts = [dest?.logradouro, dest?.numero, dest?.complemento].filter(Boolean).join(', ');
+        const enderecoCompleto = dest ? `${enderecoParts} — ${dest.cidade}, ${dest.uf} CEP ${dest.cep}` : '';
+        const linkCorreios = `https://rastreamento.correios.com.br/app/index.php?objeto=${retiradaLabel.etiqueta}`;
+        const tentativas = contarTentativasEntrega(retiradaLabel.trackingEvents);
+
+        const CopyButton = ({ text, field }: { text: string; field: string }) => (
+          <button
+            onClick={() => copyToClipboard(text, field)}
+            className={`flex-shrink-0 p-1.5 rounded transition-colors ${
+              copiedField === field
+                ? 'bg-green-100 text-green-600'
+                : 'bg-slate-100 text-slate-400 hover:text-slate-600 hover:bg-slate-200'
+            }`}
+            title={copiedField === field ? 'Copiado!' : 'Copiar'}
+          >
+            {copiedField === field ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
+        );
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !isSendingRetirada && setShowRetiradaModal(false)}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div className="px-6 py-5 border-b border-slate-100 bg-orange-50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EA580C" strokeWidth="2">
+                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                        <circle cx="12" cy="10" r="3" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h3 className="text-base font-semibold text-orange-800 font-public-sans">
+                        Notificar Retirada
+                      </h3>
+                      <p className="text-xs text-orange-600 font-mono mt-0.5">{retiradaLabel.etiqueta}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowRetiradaModal(false)}
+                    disabled={isSendingRetirada}
+                    className="p-2 hover:bg-orange-100 rounded-full transition-colors text-orange-400 disabled:opacity-50"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                {tentativas > 0 && (
+                  <div className="mt-3 flex items-center gap-2 bg-orange-100 rounded-lg px-3 py-2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9A3412" strokeWidth="2">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <line x1="12" y1="9" x2="12" y2="13" />
+                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    <span className="text-xs font-medium text-orange-800">
+                      {tentativas} tentativa(s) de entrega sem sucesso
+                    </span>
+                  </div>
+                )}
+                {retiradaLabel.retiradaNotificado && (
+                  <div className="mt-3 flex items-center gap-2 bg-green-100 rounded-lg px-3 py-2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#166534" strokeWidth="2.5">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                    <span className="text-xs font-medium text-green-800">
+                      Notificado automaticamente
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Body - scrollable */}
+              <div className="overflow-y-auto flex-1 px-6 py-5">
+                {/* Dados do Destinatário */}
+                <div className="mb-5">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Dados do Destinatário</p>
+                  <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 overflow-hidden">
+                    {/* Nome */}
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-white">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] text-slate-400 uppercase">Nome</span>
+                        <p className="text-sm text-slate-700 font-medium truncate">{nome}</p>
+                      </div>
+                      <CopyButton text={nome} field="nome" />
+                    </div>
+                    {/* Telefone */}
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-white">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] text-slate-400 uppercase">Telefone</span>
+                        <p className={`text-sm font-medium truncate ${telefoneNorm ? 'text-slate-700' : 'text-red-500'}`}>
+                          {telefone || '(vazio)'}
+                          {!telefoneNorm && telefone && <span className="text-xs ml-1">(inválido)</span>}
+                        </p>
+                      </div>
+                      <CopyButton text={telefone} field="telefone" />
+                    </div>
+                    {/* Etiqueta */}
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-white">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] text-slate-400 uppercase">Etiqueta</span>
+                        <p className="text-sm text-slate-700 font-mono font-medium">{retiradaLabel.etiqueta}</p>
+                      </div>
+                      <CopyButton text={retiradaLabel.etiqueta} field="etiqueta" />
+                    </div>
+                    {/* Endereço */}
+                    {enderecoCompleto && (
+                      <div className="flex items-center justify-between px-3 py-2.5 bg-white">
+                        <div className="min-w-0 flex-1">
+                          <span className="text-[10px] text-slate-400 uppercase">Endereço</span>
+                          <p className="text-sm text-slate-700 truncate">{enderecoCompleto}</p>
+                        </div>
+                        <CopyButton text={enderecoCompleto} field="endereco" />
+                      </div>
+                    )}
+                    {/* Link Correios */}
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-white">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] text-slate-400 uppercase">Link Correios</span>
+                        <a href={linkCorreios} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline truncate block">
+                          {linkCorreios}
+                        </a>
+                      </div>
+                      <CopyButton text={linkCorreios} field="link" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mensagem editável */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Mensagem</p>
+                    <button
+                      onClick={() => copyToClipboard(retiradaMensagem, 'mensagem')}
+                      className={`text-xs font-medium flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                        copiedField === 'mensagem'
+                          ? 'bg-green-100 text-green-600'
+                          : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {copiedField === 'mensagem' ? (
+                        <>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M20 6L9 17l-5-5" />
+                          </svg>
+                          Copiado!
+                        </>
+                      ) : (
+                        <>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                          </svg>
+                          Copiar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <textarea
+                    value={retiradaMensagem}
+                    onChange={(e) => setRetiradaMensagem(e.target.value)}
+                    rows={10}
+                    className="w-full border border-slate-200 rounded-lg p-3 text-sm text-slate-700 font-inter focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                  />
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-500 truncate">
+                  {telefoneNorm ? (
+                    <span className="flex items-center gap-1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+                      </svg>
+                      {telefoneNorm}
+                    </span>
+                  ) : (
+                    <span className="text-red-500">Telefone inválido</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowRetiradaModal(false)}
+                    disabled={isSendingRetirada}
+                    className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleSendRetirada}
+                    disabled={isSendingRetirada || !telefoneNorm}
+                    className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isSendingRetirada ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M22 2L11 13" />
+                          <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                        </svg>
+                        Enviar WhatsApp
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

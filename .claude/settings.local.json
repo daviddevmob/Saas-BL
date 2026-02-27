@@ -5,7 +5,10 @@
       "Bash(curl:*)",
       "Bash(python -m json.tool:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npx next:*)",
+      "Bash(cat:*)",
+      "Bash(npx eslint:*)"
     ]
   }
 }

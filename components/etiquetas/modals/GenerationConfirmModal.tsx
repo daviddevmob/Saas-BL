@@ -25,7 +25,6 @@ interface GenerationConfirmModalProps {
   pendingGeneration: PhysicalSale[];
   // Status
   sendToN8n: boolean;
-  clientPhoneOverride: string;
   isConfirmationValid: () => boolean;
 }
 
@@ -47,7 +46,6 @@ export default function GenerationConfirmModal({
   setEnvioObservacoes,
   pendingGeneration,
   sendToN8n,
-  clientPhoneOverride,
   isConfirmationValid,
 }: GenerationConfirmModalProps) {
   if (!isOpen) return null;

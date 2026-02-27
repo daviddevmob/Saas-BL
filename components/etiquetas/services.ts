@@ -298,6 +298,32 @@ export async function markWhatsappSent(
   }
 }
 
+// Marcar notificação de retirada como enviada (ou com erro)
+export async function markRetiradaNotificado(
+  etiqueta: string,
+  success: boolean,
+  error?: string
+): Promise<void> {
+  try {
+    const q = query(collection(db, 'etiquetas'), where('etiqueta', '==', etiqueta));
+    const snapshot = await getDocs(q);
+
+    if (!snapshot.empty) {
+      const docRef = snapshot.docs[0].ref;
+      const updateData: Record<string, unknown> = {
+        retiradaNotificado: success,
+        retiradaNotificadoEm: Timestamp.now(),
+      };
+      if (error) {
+        updateData.retiradaErro = error;
+      }
+      await updateDoc(docRef, updateData);
+    }
+  } catch (err) {
+    console.error('Erro ao marcar retirada como notificada:', err);
+  }
+}
+
 // Atualizar status de rastreio da etiqueta
 export async function updateLabelTrackingStatus(
   docId: string, // ID do documento no Firebase (não o transactionId)

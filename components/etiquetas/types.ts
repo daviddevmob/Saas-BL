@@ -113,6 +113,10 @@ export interface EtiquetaRecord {
   whatsappEnviado?: boolean | null;
   whatsappEnviadoEm?: Timestamp;
   whatsappErro?: string;
+  // Controle de notificação de retirada nos Correios
+  retiradaNotificado?: boolean;
+  retiradaNotificadoEm?: Timestamp;
+  retiradaErro?: string;
 }
 
 export interface TrackingEvent {
