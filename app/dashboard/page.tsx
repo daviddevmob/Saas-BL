@@ -491,7 +491,8 @@ export default function DashboardPage() {
         </svg>
       ),
     },
-    {
+    // Sync AnyChat - só aparece em dev
+    ...(process.env.NODE_ENV === 'development' ? [{
       id: 'sync-anychat',
       label: 'Sync AnyChat',
       icon: (
@@ -499,7 +500,7 @@ export default function DashboardPage() {
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
       ),
-    },
+    }] : []),
     // Carrinhos Abandonados - temporariamente oculto (integração via N8N + Datacrazy)
     // {
     //   id: 'carrinhos',
