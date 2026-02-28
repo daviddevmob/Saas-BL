@@ -8,7 +8,15 @@
       "Bash(npm run build:*)",
       "Bash(npx next:*)",
       "Bash(cat:*)",
-      "Bash(npx eslint:*)"
+      "Bash(npx eslint:*)",
+      "WebFetch(domain:docs.datacrazy.io)",
+      "WebSearch",
+      "WebFetch(domain:docs.anychat.one)",
+      "WebFetch(domain:api.anychat.one)",
+      "Bash(sed:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(ls:*)",
+      "Bash(curl:)"
     ]
   }
 }

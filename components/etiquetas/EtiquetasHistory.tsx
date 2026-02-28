@@ -132,19 +132,13 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
     const dest = label.destinatarioData;
     const nome = dest?.nome || label.destinatario;
     const etiqueta = label.etiqueta;
-    const evento = label.trackingEvents?.find(e => e.status.toLowerCase().includes('aguardando retirada'));
-    const local = evento?.local || '';
-    const tentativas = contarTentativasEntrega(label.trackingEvents);
-    const tentativasText = tentativas > 0
-      ? `Foram realizadas ${tentativas} tentativa(s) de entrega no seu endereço, mas sem sucesso.`
-      : 'Foram realizadas tentativas de entrega no seu endereço, mas sem sucesso.';
+    const link = `https://rastreamento.correios.com.br/app/index.php?objeto=${etiqueta}`;
 
-    return `Olá ${nome}!\n\n` +
-      `${tentativasText} Com isso, seu pacote está aguardando retirada nos Correios.\n\n` +
-      `📋 Código de rastreio: ${etiqueta}\n` +
-      `📍 Local para retirada: ${local}\n\n` +
-      `Para retirá-lo, é preciso informar o código do objeto e apresentar documentação que comprove ser o destinatário ou pessoa por ele oficialmente autorizada.\n\n` +
-      `🔗 Acompanhe: https://rastreamento.correios.com.br/app/index.php?objeto=${etiqueta}`;
+    return `🚨 ${nome}, O seu pedido exige ação imediata.\n\n` +
+      `📌 O entregador não conseguiu concluir a entrega do seu pacote.\n\n` +
+      `Verifique agora o status do rastreio e entre em contato com a unidade dos Correios responsável pela sua região para combinar a retirada antes que o pacote seja devolvido ao remetente.\n\n` +
+      `📦 Código de rastreio: ${etiqueta}\n\n` +
+      `🔗 Acompanhe o status: ${link}`;
   };
 
   // Envia mensagem genérica de WhatsApp para um telefone

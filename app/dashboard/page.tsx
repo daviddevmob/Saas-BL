@@ -14,6 +14,7 @@ import CsvUploadUnified from '@/components/CsvUploadUnified';
 import EtiquetasUpload from '@/components/EtiquetasUpload';
 import CarrinhosAbandonados from '@/components/CarrinhosAbandonados';
 import SincronizacaoDatacrazy from '@/components/SincronizacaoDatacrazy';
+import SincronizacaoAnychat from '@/components/SincronizacaoAnychat';
 
 interface MenuItem {
   id: string;
@@ -487,6 +488,15 @@ export default function DashboardPage() {
           <path d="M23 4v6h-6" />
           <path d="M1 20v-6h6" />
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+        </svg>
+      ),
+    },
+    {
+      id: 'sync-anychat',
+      label: 'Sync AnyChat',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
       ),
     },
@@ -1552,8 +1562,17 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Sync AnyChat Page */}
+        {activeMenu === 'sync-anychat' && (
+          <div className="flex-1 overflow-auto px-4 md:px-[110px] pt-6 pb-8" style={{ backgroundColor: '#F8FAFC' }}>
+            <div className="flex flex-col items-center justify-start min-h-full">
+              <SincronizacaoAnychat />
+            </div>
+          </div>
+        )}
+
         {/* Placeholder for other menu items */}
-        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && activeMenu !== 'etiquetas' && activeMenu !== 'carrinhos' && activeMenu !== 'sincronizacao' && (
+        {activeMenu !== 'inicio' && activeMenu !== 'configuracoes' && activeMenu !== 'administracao' && activeMenu !== 'integracoes' && activeMenu !== 'etiquetas' && activeMenu !== 'carrinhos' && activeMenu !== 'sincronizacao' && activeMenu !== 'sync-anychat' && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="text-center">
               <h2 className="text-2xl font-semibold text-slate-900 mb-2">

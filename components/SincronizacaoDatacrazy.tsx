@@ -130,10 +130,10 @@ export default function SincronizacaoDatacrazy() {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const jobsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as SyncJob[];
+      const jobsData = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as SyncJob))
+        .filter(j => j.tipo !== 'datacrazy-anychat-cron')
+        .slice(0, 10);
       setJobs(jobsData);
     });
 
