@@ -59,6 +59,7 @@ export interface PhysicalSale {
   etiqueta?: string; // Última etiqueta gerada (se existir)
   etiquetas?: string[]; // Todas as etiquetas geradas para este pedido
   etiquetaStatus?: 'pending' | 'generated' | 'partial' | 'error';
+  etiquetaErro?: string; // Mensagem de erro da ViPP quando etiquetaStatus === 'error'
   enviosTotal: number; // Quantidade total de envios planejados
   enviosRealizados: number; // Quantidade de envios já realizados
   // Campos para pedidos mesclados

@@ -72,8 +72,11 @@ export default function EtiquetasUpload() {
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0, success: 0, errors: 0 });
   
   // Estados de Filtro/Busca
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'partial' | 'generated' | 'merge'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'partial' | 'generated' | 'error' | 'merge'>('all');
   const [searchText, setSearchText] = useState('');
+  
+  // Estado para popover de erro
+  const [expandedError, setExpandedError] = useState<string | null>(null);
   
   // Estados de Configuração de Envio
   const [selectedServicoEct, setSelectedServicoEct] = useState(DEFAULT_SERVICO_ECT);
@@ -178,8 +181,9 @@ export default function EtiquetasUpload() {
   }, []);
 
   // Desmarcar todas ao mudar filtro ou busca
-  const handleFilterChange = (newFilter: 'all' | 'pending' | 'partial' | 'generated' | 'merge') => {
+  const handleFilterChange = (newFilter: 'all' | 'pending' | 'partial' | 'generated' | 'error' | 'merge') => {
     setStatusFilter(newFilter);
+    setExpandedError(null);
     setPhysicalSales(prev => prev.map(s => ({ ...s, selected: false })));
   };
 
@@ -226,6 +230,7 @@ export default function EtiquetasUpload() {
       if (statusFilter === 'pending') passesStatusFilter = sale.etiquetaStatus === 'pending';
       if (statusFilter === 'partial') passesStatusFilter = sale.etiquetaStatus === 'partial';
       if (statusFilter === 'generated') passesStatusFilter = sale.etiquetaStatus === 'generated';
+      if (statusFilter === 'error') passesStatusFilter = sale.etiquetaStatus === 'error';
       if (statusFilter === 'merge') {
         const isMergedItem = sale.isMerged;
         const isCandidate = !sale.isMerged &&
@@ -819,9 +824,11 @@ export default function EtiquetasUpload() {
   const selectedCount = physicalSales.filter(s =>
     s.selected && !s.mergedInto && (
       s.etiquetaStatus === 'pending' ||
+      s.etiquetaStatus === 'error' ||
       (s.etiquetaStatus === 'partial' && s.enviosRealizados < s.enviosTotal)
     )
   ).length;
+  const errorFilterCount = physicalSales.filter(s => s.etiquetaStatus === 'error' && !s.mergedInto).length;
   const alreadyGeneratedCount = physicalSales.filter(s => s.etiquetaStatus === 'generated' && !s.mergedInto).length;
   const selectedGeneratedCount = physicalSales.filter(s => s.selected && s.etiquetaStatus === 'generated' && !s.mergedInto).length;
   const partialCount = physicalSales.filter(s => s.etiquetaStatus === 'partial' && !s.mergedInto).length;
@@ -1031,8 +1038,9 @@ export default function EtiquetasUpload() {
           }
         } catch (err) {
           console.error(`Erro ao gerar etiqueta para ${sale.transaction}:`, err);
+          const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido ao gerar etiqueta';
           setPhysicalSales(prev => prev.map(s =>
-            s.transaction === sale.transaction ? { ...s, etiquetaStatus: 'error' } : s
+            s.transaction === sale.transaction ? { ...s, etiquetaStatus: 'error', etiquetaErro: errorMsg } : s
           ));
           errorCount++;
         }
@@ -1125,7 +1133,11 @@ export default function EtiquetasUpload() {
 
   const handleGenerateLabels = () => {
     const toGenerate = physicalSales.filter(s =>
-      s.selected && (s.etiquetaStatus === 'pending' || (s.etiquetaStatus === 'partial' && s.enviosRealizados < s.enviosTotal))
+      s.selected && (
+        s.etiquetaStatus === 'pending' ||
+        s.etiquetaStatus === 'error' ||
+        (s.etiquetaStatus === 'partial' && s.enviosRealizados < s.enviosTotal)
+      )
     );
     const alreadyGenerated = physicalSales.filter(s => s.selected && s.etiquetaStatus === 'generated' && s.etiqueta);
 
@@ -1179,6 +1191,7 @@ export default function EtiquetasUpload() {
     setFileName(null);
     setTotalRows(0);
     setError(null);
+    setExpandedError(null);
     setGenerationProgress({ current: 0, total: 0, success: 0, errors: 0 });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1289,6 +1302,7 @@ export default function EtiquetasUpload() {
             { id: 'pending', label: 'Pendente' },
             { id: 'partial', label: 'Parcial', count: partialCount },
             { id: 'generated', label: 'Gerado' },
+            { id: 'error', label: 'Erro', count: errorFilterCount },
             { id: 'merge', label: 'Mesclar', count: mergeFilterCount }
           ].map((filter) => (
             <button
@@ -1353,6 +1367,26 @@ export default function EtiquetasUpload() {
           )}
         </div>
       </div>
+
+      {/* Barra de Progresso */}
+      {isGenerating && (
+        <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-slate-700 font-inter">
+              Gerando etiquetas... {generationProgress.current}/{generationProgress.total}
+            </span>
+            <span className="text-sm text-slate-500 font-inter">
+              ✅ {generationProgress.success} sucesso  ❌ {generationProgress.errors} erros
+            </span>
+          </div>
+          <div className="w-full h-2 bg-blue-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${generationProgress.total > 0 ? (generationProgress.current / generationProgress.total) * 100 : 0}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Tabela de Vendas */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
@@ -1422,7 +1456,40 @@ export default function EtiquetasUpload() {
                       ) : sale.etiquetaStatus === 'partial' ? (
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">Parcial</span>
                       ) : sale.etiquetaStatus === 'error' ? (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">Erro</span>
+                        <div className="relative">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setExpandedError(prev => prev === sale.transaction ? null : sale.transaction); }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 cursor-pointer transition-colors"
+                            title="Clique para ver detalhes do erro"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                            </svg>
+                            Erro
+                          </button>
+                          {expandedError === sale.transaction && (
+                            <div
+                              className="absolute z-50 top-full mt-1 right-0 w-80 bg-white border border-red-200 rounded-lg shadow-xl p-3"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-semibold text-red-800 mb-1">Falha na geração da etiqueta</p>
+                                  <p className="text-xs text-red-600 break-words">{sale.etiquetaErro || 'Erro desconhecido'}</p>
+                                  <p className="text-[10px] text-slate-400 mt-2 font-mono truncate">{sale.transaction}</p>
+                                </div>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setExpandedError(null); }}
+                                  className="text-slate-400 hover:text-slate-600 flex-shrink-0 p-0.5"
+                                >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                                  </svg>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600">Pendente</span>
                       )}
