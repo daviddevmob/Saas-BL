@@ -137,3 +137,15 @@ export function formatDateBR(dateStr: string): string {
 
   return dateStr;
 }
+
+// Re-exportar sanitizadores e normalizadores ViPP / Correios
+export {
+  sanitizeVippText,
+  sanitizeVippDestinatario,
+  normalizeUF,
+  normalizeCidade,
+  normalizeNumeroEComplemento,
+  normalizeCEP,
+  normalizeTelefone,
+} from '@/lib/vippSanitizer';
+

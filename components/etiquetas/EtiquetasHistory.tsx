@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { EtiquetaRecord, TrackingEvent } from './types';
 import { fetchLabelsHistory, updateLabelTrackingStatus, fetchLabelByTransactionId, saveLabel, loadEtiquetasSettings, markWhatsappSent, markRetiradaNotificado } from './services';
-import { formatDateBR, formatPhone } from './utils';
+import { formatDateBR, formatPhone, sanitizeVippDestinatario } from './utils';
 import { SERVICOS_ECT, DEFAULT_SERVICO_ECT } from './constants';
 import { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 
@@ -654,7 +654,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
       setReenvioProgress(prev => ({ ...prev, current: i + 1 }));
 
       try {
-        const dest = label.destinatarioData!;
+        const dest = sanitizeVippDestinatario(label.destinatarioData!);
         const novoTransactionId = `${label.transactionId}-REENVIO-${Date.now()}`;
 
         const response = await fetch('/api/vipp/postar-objeto', {
@@ -664,19 +664,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
             transactionId: novoTransactionId,
             servicoEct: reenvioServico,
             useTestCredentials,
-            destinatario: {
-              nome: dest.nome,
-              documento: dest.documento || '',
-              logradouro: dest.logradouro || '',
-              numero: dest.numero || 'S/N',
-              complemento: dest.complemento || '',
-              bairro: dest.bairro || '',
-              cidade: dest.cidade || '',
-              uf: dest.uf || '',
-              cep: dest.cep?.replace(/\D/g, '') || '',
-              telefone: dest.telefone || '',
-              email: dest.email || '',
-            },
+            destinatario: dest,
           }),
         });
 
@@ -711,18 +699,7 @@ export default function EtiquetasHistory({ onImportClick }: EtiquetasHistoryProp
             transactionId: label.transactionId,
             produto: label.productName || 'Reenvio',
             dataPedido: new Date().toISOString().split('T')[0],
-            destinatario: {
-              nome: dest.nome,
-              telefone: dest.telefone || '',
-              email: dest.email || '',
-              logradouro: dest.logradouro || '',
-              numero: dest.numero || 'S/N',
-              complemento: dest.complemento || '',
-              bairro: dest.bairro || '',
-              cidade: dest.cidade || '',
-              uf: dest.uf || '',
-              cep: dest.cep?.replace(/\D/g, '') || '',
-            },
+            destinatario: dest,
             envioNumero,
             enviosTotal,
             isEnvioParcial: true,

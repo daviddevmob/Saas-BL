@@ -26,6 +26,7 @@ import {
   autoDetectMapping,
   generateMergeId,
   sanitizeForFirebase,
+  sanitizeVippDestinatario,
 } from './etiquetas/utils';
 
 import {
@@ -893,12 +894,8 @@ export default function EtiquetasUpload() {
 
     const etiquetasNovas: any[] = [];
     const todasEtiquetasParaPdf: string[] = alreadyGenerated.map(s => s.etiqueta as string);
-    const etiquetasJaGeradas = alreadyGenerated.map(sale => ({
-      codigo: sale.etiqueta || '',
-      transactionId: sale.transaction,
-      produto: sale.productName,
-      dataPedido: sale.saleDate,
-      destinatario: {
+    const etiquetasJaGeradas = alreadyGenerated.map(sale => {
+      const destSanitizado = sanitizeVippDestinatario({
         nome: sale.name,
         telefone: sale.phone,
         email: sale.email,
@@ -909,17 +906,26 @@ export default function EtiquetasUpload() {
         cidade: sale.city,
         uf: sale.state,
         cep: sale.zip?.replace(/\D/g, '') || '',
-      },
-      envioNumero: sale.enviosRealizados || 1,
-      enviosTotal: sale.enviosTotal || 1,
-      isEnvioParcial: (sale.enviosTotal || 1) > 1,
-      observacaoEnvio: observacoes[sale.transaction] || '',
-      ...(sale.isMerged && {
-        isMerged: true,
-        mergedTransactionIds: sale.mergedTransactions || [],
-        produtos: sale.mergedProductNames || [],
-      }),
-    }));
+        documento: sale.document,
+      });
+
+      return {
+        codigo: sale.etiqueta || '',
+        transactionId: sale.transaction,
+        produto: sale.productName,
+        dataPedido: sale.saleDate,
+        destinatario: destSanitizado,
+        envioNumero: sale.enviosRealizados || 1,
+        enviosTotal: sale.enviosTotal || 1,
+        isEnvioParcial: (sale.enviosTotal || 1) > 1,
+        observacaoEnvio: observacoes[sale.transaction] || '',
+        ...(sale.isMerged && {
+          isMerged: true,
+          mergedTransactionIds: sale.mergedTransactions || [],
+          produtos: sale.mergedProductNames || [],
+        }),
+      };
+    });
 
     if (toGenerate.length > 0) {
       setIsGenerating(true);
@@ -932,6 +938,20 @@ export default function EtiquetasUpload() {
         setGenerationProgress(prev => ({ ...prev, current: i + 1 }));
 
         try {
+          const destSanitizado = sanitizeVippDestinatario({
+            nome: sale.name,
+            documento: sale.document,
+            logradouro: sale.address,
+            numero: sale.number || 'S/N',
+            complemento: sale.complement,
+            bairro: sale.neighborhood,
+            cidade: sale.city,
+            uf: sale.state,
+            cep: sale.zip?.replace(/\D/g, '') || '',
+            telefone: sale.phone,
+            email: sale.email,
+          });
+
           const response = await fetch('/api/vipp/postar-objeto', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -939,19 +959,7 @@ export default function EtiquetasUpload() {
               transactionId: sale.transaction,
               servicoEct: selectedServicoEct,
               useTestCredentials,
-              destinatario: {
-                nome: sale.name,
-                documento: sale.document,
-                logradouro: sale.address,
-                numero: sale.number || 'S/N',
-                complemento: sale.complement,
-                bairro: sale.neighborhood,
-                cidade: sale.city,
-                uf: sale.state,
-                cep: sale.zip.replace(/\D/g, ''),
-                telefone: sale.phone,
-                email: sale.email,
-              },
+              destinatario: destSanitizado,
             }),
           });
 
@@ -965,7 +973,7 @@ export default function EtiquetasUpload() {
             await saveLabel(
               sale.transaction,
               result.etiqueta,
-              sale.name,
+              destSanitizado.nome,
               envioNumero,
               sale.enviosTotal,
               sale.mergedTransactions,
@@ -975,19 +983,7 @@ export default function EtiquetasUpload() {
               selectedServicoEct,
               sale.zip,
               // Dados completos do destinatário para permitir reenvio futuro
-              {
-                nome: sale.name,
-                documento: sale.document,
-                email: sale.email,
-                telefone: sale.phone,
-                logradouro: sale.address,
-                numero: sale.number || 'S/N',
-                complemento: sale.complement,
-                bairro: sale.neighborhood,
-                cidade: sale.city,
-                uf: sale.state,
-                cep: sale.zip?.replace(/\D/g, '') || '',
-              }
+              destSanitizado
             );
 
             etiquetasNovas.push({
@@ -995,18 +991,7 @@ export default function EtiquetasUpload() {
               transactionId: sale.transaction,
               produto: sale.productName,
               dataPedido: sale.saleDate,
-              destinatario: {
-                nome: sale.name,
-                telefone: sale.phone,
-                email: sale.email,
-                logradouro: sale.address,
-                numero: sale.number || 'S/N',
-                complemento: sale.complement || '',
-                bairro: sale.neighborhood,
-                cidade: sale.city,
-                uf: sale.state,
-                cep: sale.zip?.replace(/\D/g, '') || '',
-              },
+              destinatario: destSanitizado,
               envioNumero: novoEnviosRealizados,
               enviosTotal: sale.enviosTotal,
               isEnvioParcial: sale.enviosTotal > 1,

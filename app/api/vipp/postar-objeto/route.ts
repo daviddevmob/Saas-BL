@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { sanitizeVippDestinatario, sanitizeVippText, DestinatarioData } from '@/lib/vippSanitizer';
 
 // Credenciais de PRODUÇÃO
 const VIPP_CONFIG_PROD = {
@@ -23,20 +24,6 @@ const VIPP_CONFIG_TEST = {
   codAdministrativo: '',
   nrCartao: '',
 };
-
-interface DestinatarioData {
-  nome: string;
-  logradouro: string;
-  numero: string;
-  complemento: string;
-  bairro: string;
-  cidade: string;
-  uf: string;
-  cep: string;
-  telefone: string;
-  email: string;
-  documento: string;
-}
 
 interface PostarObjetoRequest {
   transactionId: string;
@@ -64,6 +51,10 @@ export async function POST(request: NextRequest) {
     // Usar servicoEct do request ou fallback para env
     const servicoEctFinal = servicoEct || VIPP_CONFIG.servicoEct;
 
+    // Sanitizar dados do destinatário e transação para formato ASCII compatível com ViPP e Correios
+    const cleanDestinatario = sanitizeVippDestinatario(destinatario);
+    const cleanTransactionId = sanitizeVippText(transactionId, 50);
+
     // Montar payload para ViPP conforme documentação REST/JSON
     const vippPayload = {
       PerfilVipp: {
@@ -77,20 +68,20 @@ export async function POST(request: NextRequest) {
         NrCartao: VIPP_CONFIG.nrCartao,
       },
       Destinatario: {
-        CnpjCpf: destinatario.documento?.replace(/\D/g, '') || '',
+        CnpjCpf: cleanDestinatario.documento,
         IeRg: '',
-        Nome: destinatario.nome,
+        Nome: cleanDestinatario.nome,
         SegundaLinhaDestinatario: '',
-        Endereco: destinatario.logradouro,
-        Numero: destinatario.numero || 'S/N',
-        Complemento: destinatario.complemento || '',
-        Bairro: destinatario.bairro || '',
-        Cidade: destinatario.cidade,
-        UF: destinatario.uf,
-        Cep: destinatario.cep?.replace(/\D/g, '') || '',
-        Telefone: destinatario.telefone?.replace(/\D/g, '') || '',
+        Endereco: cleanDestinatario.logradouro,
+        Numero: cleanDestinatario.numero,
+        Complemento: cleanDestinatario.complemento,
+        Bairro: cleanDestinatario.bairro,
+        Cidade: cleanDestinatario.cidade,
+        UF: cleanDestinatario.uf,
+        Cep: cleanDestinatario.cep,
+        Telefone: cleanDestinatario.telefone,
         Celular: '',
-        Email: destinatario.email || '',
+        Email: cleanDestinatario.email,
       },
       Servico: {
         ServicoECT: servicoEctFinal, // Usa o serviço do request ou fallback para env
@@ -112,7 +103,7 @@ export async function POST(request: NextRequest) {
           ContaLote: '',
           ChaveRoteamento: '',
           CodigoBarraVolume: '',
-          CodigoBarraCliente: transactionId,
+          CodigoBarraCliente: cleanTransactionId,
           ObservacaoVisual: '',
           ObservacaoQuatro: '',
           ObservacaoCinco: '',
@@ -126,7 +117,8 @@ export async function POST(request: NextRequest) {
       ],
     };
 
-    console.log('ViPP Request:', JSON.stringify(vippPayload, null, 2));
+    console.log('ViPP Request (Sanitizado):', JSON.stringify(vippPayload, null, 2));
+
 
     // Chamar ViPP API
     const response = await fetch(VIPP_CONFIG.url, {
